@@ -1,24 +1,269 @@
+# Windy — 風洞実験計測制御システム
+
+MATLAB + Python による風洞実験の自動計測・制御システムです。
+迎角ステージ（QT-ADL1）と6軸力覚センサ（Leptrino）、デジタルマルチメータ（R6441B）を統合して実験を制御します。
+
+---
+
+## 構成機器
+
+| 機器 | メーカー/型番 | 接続方式 | 担当ファイル |
+|------|-------------|---------|------------|
+| 迎角ステージコントローラ | 中央精機 QT-ADL1 | RS-232C (COMポート) | `QT_ADL1.m` |
+| 6軸力覚センサ | Leptrino | USB (CfsUsb.dll) | `leptrino/leptrino_server.py` |
+| デジタルマルチメータ | Advantest R6441B | RS-232C (COMポート) | `get_voltage.m` |
+
+---
+
 ## セットアップ
 
-1. `config.json.example` を `config.json` としてコピー
-2. `config.json` を自分の環境に合わせて編集
-   - `python_exe`: Python実行ファイルのパス
-   - `leptrino_port`: 天秤のCOMポート番号（デバイスマネージャーで確認）
-3. `config.json` は `.gitignore` により Git の管理対象外です（コミットしないでください）
+### 1. リポジトリのクローン
 
-## 注意事項
+```bash
+git clone <リポジトリURL>
+cd Windy
+```
 
-### Python は 32bit 版を使用すること
+### 2. 設定ファイルの作成
 
-`CfsUsb.dll` は 32bit 版の DLL です。
-64bit 版の Python を使用すると DLL の読み込みに失敗します。
+`config.json.example` をコピーして `config.json` を作成します。
 
-- ✅ Python 3.x (32bit) — `python.exe` のパスに `Python312-32` のように `-32` が含まれるもの
-- ❌ Python 3.x (64bit) — 通常のインストーラでインストールしたもの
+```bash
+copy config.json.example config.json   # Windows
+```
 
-### 32bit 版 Python のインストール
+`config.json` を自分の環境に合わせて編集します。
+
+```json
+{
+  "python_exe": "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
+  "leptrino_port": 5,
+  "qt_adl1_port": "COM7"
+}
+```
+
+| キー | 説明 | 確認方法 |
+|-----|------|---------|
+| `python_exe` | **32bit** Python の実行ファイルのフルパス | インストール先フォルダを確認 |
+| `leptrino_port` | Leptrino センサの COM ポート番号（数字のみ） | デバイスマネージャー |
+| `qt_adl1_port` | QT-ADL1 の COM ポート文字列 | デバイスマネージャー |
+| `r6441b_port` | R6441B の COM ポート文字列 | デバイスマネージャー |
+| `r6441b_n_samples` | 取得サンプル数 | — |
+| `r6441b_timeout_sec` | 受信タイムアウト [秒] | — |
+
+> ⚠️ `config.json` は `.gitignore` により Git 管理対象外です。コミットしないでください。
+
+### 3. Python（32bit 版）のインストール
+
+`CfsUsb.dll` は 32bit 版の DLL のため、**必ず 32bit 版の Python を使用してください**。
+64bit 版では DLL の読み込みに失敗します。
 
 1. https://www.python.org/downloads/ にアクセス
 2. 目的のバージョンのページを開く
 3. インストーラ一覧から **Windows installer (32-bit)** を選択してインストール
 4. インストール先のパスを `config.json` の `python_exe` に設定する
+
+インストール先の例：
+```
+C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe
+```
+
+✅ パスに `Python312-32` のように **`-32`** が含まれていれば 32bit 版です。
+
+---
+
+## ファイル構成
+
+```
+Windy/
+├── config.json.example         # 設定ファイルのテンプレート
+├── config.json                 # 各自の設定（Git管理外）
+│
+├── QT_ADL1.m                   # 迎角ステージ ドライバクラス
+├── QT_ADL1_check_connection.m  # 迎角ステージ 接続確認スクリプト
+│
+├── get_sensor_data.m           # Leptrinoセンサ データ取得関数
+├── get_voltage.m               # R6441B デジタルマルチメータ データ取得スクリプト
+│
+└── leptrino/
+    ├── leptrino_server.py      # Leptrinoセンサ 計測スクリプト（Python）
+    └── CfsUsb.dll              # Leptrino USB ドライバ DLL（32bit）
+```
+
+---
+
+## 使い方
+
+### 迎角ステージ（QT-ADL1）
+
+#### 接続確認
+
+```matlab
+QT_ADL1_check_connection
+```
+
+利用可能な COM ポートの一覧を表示し、`config.json` の `qt_adl1_port` で指定したポートへの接続と通信を確認します。
+
+#### 基本操作
+
+```matlab
+% 接続
+stage = QT_ADL1('COM7');
+
+% 原点復帰（必ず最初に実行）→ 自動で迎角0°へ移動
+stage.homeReturn();
+
+% 迎角の指定移動
+stage.moveToAngle(15.0);   % 15°へ移動
+stage.moveToAngle(0);      % 0°へ戻る
+
+% 現在の迎角を取得
+angle = stage.getAngle();
+fprintf('現在の迎角: %.4f°\n', angle);
+
+% 減速停止
+stage.stop();
+
+% 切断
+delete(stage);
+```
+
+#### 迎角スイープ
+
+```matlab
+stage = QT_ADL1('COM7');
+stage.homeReturn();
+
+% 0°から30°まで1°ステップでスイープ、各点で2秒待機
+stage.sweep(0:1:30, 2.0);
+
+delete(stage);
+```
+
+各測定点では迎角0°を経由してから目標迎角へ移動します（ヒステリシスの影響を低減するため）。
+
+コールバック関数を使って各迎角での計測処理を組み込むこともできます。
+
+```matlab
+stage.sweep(0:1:30, 2.0, @myMeasurementFunc);
+```
+
+#### 座標系について
+
+| 迎角 | パルス値 |
+|-----|---------|
+| 0° | 11250 pulse |
+| +1° | 11000 pulse |
+| +θ° | 11250 − θ × 250 pulse |
+
+- 迎角増加方向 = パルス減少（CCW 方向）
+- 分解能：0.004°/pulse（ARS-936-HP）
+
+---
+
+### 6軸力覚センサ（Leptrino）
+
+#### データ取得
+
+```matlab
+data = get_sensor_data();
+
+fprintf('Fx = %.4f N\n', data.Fx);
+fprintf('Fy = %.4f N\n', data.Fy);
+fprintf('Fz = %.4f N\n', data.Fz);
+fprintf('Mx = %.4f Nm\n', data.Mx);
+fprintf('My = %.4f Nm\n', data.My);
+fprintf('Mz = %.4f Nm\n', data.Mz);
+```
+
+#### 取得される値
+
+| フィールド | 内容 |
+|-----------|------|
+| `Fx`, `Fy`, `Fz` | 力 [N] |
+| `Mx`, `My`, `Mz` | モーメント [Nm] |
+| `limit` | センサ定格値（6要素配列） |
+| `n` | 平均に使用したサンプル数 |
+
+内部では約 200Hz × 1秒間のデータを収集して平均値を返します。
+
+#### 仕組み
+
+MATLAB から Python スクリプト（`leptrino/leptrino_server.py`）をサブプロセスとして呼び出し、結果を JSON で受け取ります。Python 側では 32bit DLL（`CfsUsb.dll`）を経由してセンサと通信します。
+
+---
+
+### デジタルマルチメータ（R6441B）
+
+`get_voltage.m` を実行すると、指定サンプル数の測定値を取得して CSV に保存します。
+
+設定は `config.json` で管理します。
+
+```json
+{
+  "r6441b_port":        "COM6",
+  "r6441b_n_samples":   100,
+  "r6441b_timeout_sec": 5
+}
+```
+
+| キー | 説明 |
+|-----|------|
+| `r6441b_port` | COM ポート文字列（例：`"COM6"`） |
+| `r6441b_n_samples` | 取得サンプル数 |
+| `r6441b_timeout_sec` | 受信タイムアウト [秒] |
+
+出力ファイル：`pressure_data.csv`（列：`Time_s`, `Pressure_raw`）
+
+> 通信仕様：9600bps / 8bit / パリティなし / ストップビット1 / ハードウェアフロー制御（DTR/DSR）
+
+---
+
+## トラブルシューティング
+
+### DLL の読み込みに失敗する
+
+```
+DLL読み込み失敗: ...
+```
+
+Python が 64bit 版になっています。**32bit 版の Python** をインストールして `config.json` の `python_exe` を更新してください。
+
+### PortOpen 失敗
+
+```
+PortOpen失敗
+```
+
+`config.json` の `leptrino_port` が間違っています。デバイスマネージャーで Leptrino センサの COM ポート番号を確認してください。
+
+### センサデータが取得できない
+
+```
+データ取得失敗
+```
+
+センサが正常に動作しているか、USB ケーブルの接続を確認してください。それでも解決しない場合はセンサの電源を入れ直してください。
+
+### QT-ADL1 が応答しない
+
+- デバイスマネージャーで `qt_adl1_port` に指定した COM ポートが表示されているか確認
+- `QT_ADL1_check_connection` スクリプトで通信確認
+- ケーブル（RS-232C または USB-シリアル変換）の接続を確認
+
+### タイムアウトエラー
+
+```
+waitForStop: タイムアウト (30 秒)
+```
+
+ステージが移動範囲の限界付近にいる可能性があります。`stage.stop()` で停止後、`stage.homeReturn()` から再実行してください。
+
+---
+
+## 注意事項
+
+- 実験前に必ず `homeReturn()` を実行して機械原点を確定させてください
+- スイープ中にステージを手で止めないでください
+- `config.json` はリポジトリにコミットしないでください（個人の環境情報が含まれます）
+- Leptrino の Python スクリプトは必ず 32bit Python で実行してください

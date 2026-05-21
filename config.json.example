@@ -1,5 +1,8 @@
 {
   "python_exe": "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
   "leptrino_port": 5,
-  "qt_adl1_port": "COM7"
+  "qt_adl1_port": "COM7",
+  "r6441b_port": "COM6",
+  "r6441b_n_samples": 100,
+  "r6441b_timeout_sec": 5
 }
