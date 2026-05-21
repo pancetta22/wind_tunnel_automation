@@ -1,0 +1,5 @@
+{
+  "python_exe": "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
+  "leptrino_port": 5,
+  "qt_adl1_port": "COM7"
+}

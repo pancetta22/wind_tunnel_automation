@@ -6,3 +6,4 @@
 *.mat
 codegen/
 slprj/
+config.json
