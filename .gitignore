@@ -7,3 +7,16 @@
 codegen/
 slprj/
 config.json
+
+# Antigravity CLI
+.antigravitycli/
+
+# Python Virtual Environment
+.venv/
+venv/
+ENV/
+
+# OS/IDE generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
