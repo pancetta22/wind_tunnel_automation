@@ -576,6 +576,7 @@ fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
 | 1 | デジボルCSVのエンコーディング | UTF-8と仮定 | 既存Pythonのcsv読み込み部分を確認する必要がある |
 | 2 | 6軸センサの実効サンプリングレート | 1200Hzと仮定 | `GetSerialData` を1200Hzで安定して呼べるか実機で確認が必要 |
 | 3 | デジボルと6軸センサの同時計測方法 | `parfeval` を想定 | MATLABのParallel Computing Toolbox の有無に依存する。なければ代替手段（`system` による非同期プロセス起動）を検討 |
+      結論：Parallel Computing Toolboxなし
 | 4 | 途中再開機能の要否 | 低優先度として保留 | 1フェーズあたり約20分×4フェーズ≒80分の実験。中断リスクの許容度による |
 | 5 | `output_dir` 以下のフォルダ構成 | 未定 | 実験日ごとにサブフォルダを切るか、フラットに並べるか |
 | 6 | `WindyMonitor` のグラフ更新頻度 | 未定 | 高頻度更新（1200Hz）は描画負荷が高い。間引き頻度（例：10Hz更新）を決める必要がある |
