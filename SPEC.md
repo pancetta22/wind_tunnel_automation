@@ -107,7 +107,7 @@
 ### 4.1 フルファイル名（6軸CSV・デジボルCSV 共通）
 
 ```
-YYYYMMDD_HHMMSS_YYMMDD_[type]_[angle]_[suffix].csv
+YYYYMMDD_HHMMSS_YYMMDD_[type]_[angle].[suffix].csv
 ```
 
 | フィールド | 内容 | 例 |
@@ -141,14 +141,14 @@ YYYYMMDD_HHMMSS_YYMMDD_[type]_[angle]_[suffix].csv
 
 | 物理的な迎角 | ファイル名（タイムスタンプ省略） |
 |------------|-------------------------------|
-| 0°（初回） | `260520_Pofst_00_00.csv` |
-| 1° | `260520_Pofst_01_01.csv` |
-| 0°（1°の後） | `260520_Pofst_01_00.csv` |
-| 2° | `260520_Pofst_02_01.csv` |
-| 0°（2°の後） | `260520_Pofst_02_00.csv` |
+| 0°（初回） | `260520_Pofst_00.00.csv` |
+| 1° | `260520_Pofst_01.01.csv` |
+| 0°（1°の後） | `260520_Pofst_01.00.csv` |
+| 2° | `260520_Pofst_02.01.csv` |
+| 0°（2°の後） | `260520_Pofst_02.00.csv` |
 | ... | ... |
-| 30° | `260520_Pofst_30_01.csv` |
-| 0°（30°の後） | `260520_Pofst_30_00.csv` |
+| 30° | `260520_Pofst_30.01.csv` |
+| 0°（30°の後） | `260520_Pofst_30.00.csv` |
 
 ### 4.3 短縮名（既存Pythonとの互換用）
 
@@ -160,7 +160,7 @@ YYMMDD_[type]_[angle].[suffix]
 
 例: `260520_Pofst_12.01`
 
-> **注意**: 短縮名では `[angle]` と `[suffix]` の区切りが**ピリオド**（`.`）であるのに対し、フルファイル名では**アンダースコア**（`_`）を用いる。
+> **注意**: フルファイル名・短縮名ともに `[angle]` と `[suffix]` の区切りは**ピリオド**（`.`）で統一する。既存の `calc_force.py` が `endswith("00.00.csv")` 等のドット区切りで判定しているため、互換性維持のためアンダースコアは使わない。
 
 ---
 
@@ -270,10 +270,10 @@ sample_no,voltage_mV
 6軸センサCSVのファイル名の末尾 `.csv` を `_volt_raw.csv` に置き換えた名前とする。
 
 ```
-YYYYMMDD_HHMMSS_YYMMDD_[type]_[angle]_[suffix]_volt_raw.csv
+YYYYMMDD_HHMMSS_YYMMDD_[type]_[angle].[suffix]_volt_raw.csv
 ```
 
-例：`20260520_094953_260520_Pofst_12_01_volt_raw.csv`
+例：`20260520_094953_260520_Pofst_12.01_volt_raw.csv`
 
 これにより、6軸CSVとデジボル生データCSVが `name` を介して1対1で対応づけられる。
 
@@ -316,8 +316,8 @@ data（有風）フェーズ開始前:
   ...
 [計測完了] 6軸センサ: 1004.2 KB, デジボル: 1463 サンプル（平均: -3.81 mV）
 
-[保存] 20260520_094953_260520_Pofst_12_01.csv         （6軸センサ）
-[保存] 20260520_094953_260520_Pofst_12_01_volt_raw.csv （デジボル生データ）
+[保存] 20260520_094953_260520_Pofst_12.01.csv         （6軸センサ）
+[保存] 20260520_094953_260520_Pofst_12.01_volt_raw.csv （デジボル生データ）
 [更新] 20260520_Pofst_volt_summary.csv に1行追記（23/61 点完了）
 ```
 
@@ -397,11 +397,29 @@ MATLABでの実装では `parfeval` または別プロセス起動を検討す�
 | 項目 | 既存 | 新システム |
 |------|------|-----------|
 | 6軸CSVの形式 | メーカーデータロガーが生成 | 本システムが同一形式で生成 |
-| 6軸CSVのファイル名 | 実験員が手動入力 | 本システムが自動生成 |
+| 6軸CSVのファイル名 | 実験員が手動入力 | 本システムが自動生成（ドット区切り `[angle].[suffix].csv` を維持） |
+| dataフォルダのファイル数 | 計測点ごとに生CSV + fc10HzフィルタCSV の 2ファイル | 生CSVのみ 1ファイル |
 | デジボル記録 | 目視でExcelシートに記入 | 本システムがCSVに自動記録（サマリー＋生データ） |
 | デジボルCSVの列 | `No.`, `迎角`, `name`, `差圧電圧[mV]`, `風速[m/s]` | 同一 |
 | 風速[m/s] 計算 | 既存Pythonが差圧電圧から計算 | 同左（将来：差圧電圧を変数とする数式で直接算出する方式に改修予定） |
-| CLα 解析 | 既存Python | 既存Python（変更なし） |
+| CLα 解析 | 既存Python | 既存Python（下記の軽微な修正が必要） |
+
+### `calc_force.py` に必要な軽微な修正
+
+本システム導入後は dataフォルダ内のファイルが **1ファイル/計測点**（fc10Hz版なし）になる。
+既存の `average()` 関数は `case_num = int(len(folder_list) / 2)` で2ファイル/計測点を前提としているため、以下の修正が必要。
+
+```python
+# 修正前
+case_num = int(len(folder_list) / 2)
+for i in range(case_num):
+    data1_name = folder_list[2 * i]   # 偶数インデックスのみ処理
+
+# 修正後
+case_num = len(folder_list)
+for i in range(case_num):
+    data1_name = folder_list[i]       # 全ファイルを処理
+```
 
 ---
 
@@ -488,11 +506,11 @@ MATLABのFigureウィンドウを使ったリアルタイムモニタリング�
 ```matlab
 % フルファイル名（6軸CSV用）
 fname = make_filename(date_str, time_str, phase, ref_angle, suffix, 'full');
-% → '20260520_094953_260520_Pofst_12_01.csv'
+% → '20260520_094953_260520_Pofst_12.01.csv'
 
 % デジボル生データCSV用
 fname = make_filename(date_str, time_str, phase, ref_angle, suffix, 'volt_raw');
-% → '20260520_094953_260520_Pofst_12_01_volt_raw.csv'
+% → '20260520_094953_260520_Pofst_12.01_volt_raw.csv'
 
 % 短縮名（デジボルサマリーCSVのname列用）
 name = make_filename(date_str, time_str, phase, ref_angle, suffix, 'short');
@@ -573,7 +591,7 @@ fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
 
 | # | 項目 | 現状 | 確認が必要な理由 |
 |---|------|------|----------------|
-| 1 | デジボルCSVのエンコーディング | UTF-8と仮定 | 既存Pythonのcsv読み込み部分を確認する必要がある |
+| 1 | デジボルCSVのエンコーディング | UTF-8（確定） | 既存 `calc_force.py` は `windspeed.csv` を `pd.read_csv()` でエンコーディング指定なしに読んでいるため UTF-8 で問題なし |
 | 2 | 6軸センサの実効サンプリングレート | 1200Hzと仮定 | `GetSerialData` を1200Hzで安定して呼べるか実機で確認が必要 |
 | 3 | デジボルと6軸センサの同時計測方法 | `parfeval` を想定 | MATLABのParallel Computing Toolbox の有無に依存する。なければ代替手段（`system` による非同期プロセス起動）を検討 |
       結論：Parallel Computing Toolboxなし
