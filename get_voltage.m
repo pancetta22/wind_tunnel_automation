@@ -1,5 +1,5 @@
 %% Advantest R6441B RS-232C データ取得
-COM_PORT    = 'COM7';
+COM_PORT    = 'COM10';
 BAUD_RATE   = 9600;
 N_SAMPLES   = 100;
 TIMEOUT_SEC = 5;
