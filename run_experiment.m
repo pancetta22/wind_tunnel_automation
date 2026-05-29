@@ -81,6 +81,7 @@ fprintf('[記録] 気象条件を保存: %s\n\n', log_fname);
 confirm_blower_(phase);
 
 % =====================================================================
+<<<<<<< Updated upstream
 %  4.5. 差圧センサ電圧オフセット自動計測（無風フェーズのみ）
 % =====================================================================
 if contains(phase, 'ofst')
@@ -96,6 +97,22 @@ if contains(phase, 'ofst')
         end
     else
         fprintf('[スキップ] config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
+=======
+%  4.5. 電圧オフセット自動計測（Pofst / Mofst フェーズのみ）
+%       ブロワーが停止している状態で R6441B を数秒読み取り、
+%       無風時の差圧電圧オフセットを実測する。
+% =====================================================================
+if contains(phase, 'ofst')
+    measured_offset = measure_volt_offset_(s_volt);
+    if ~isnan(measured_offset)
+        met.volt_offset_mV = measured_offset;
+        save_experiment_log_(log_path, date_str, met);
+        fprintf('[更新] experiment_log.json を更新 (volt_offset_mV = %.4f mV)\n\n', ...
+            measured_offset);
+    else
+        fprintf('[警告] オフセット計測失敗 — config.json の設定値 (%.1f mV) を使用します\n\n', ...
+            cfg.volt_offset_mV);
+>>>>>>> Stashed changes
     end
 end
 
@@ -480,6 +497,7 @@ function save_experiment_log_(filepath, date_str, met)
 end
 
 function offset_mV = measure_volt_offset_(s_volt)
+<<<<<<< Updated upstream
     % 無風時の差圧電圧を5秒間計測し、平均値をオフセットとして返す
     %
     % 返値:
@@ -491,6 +509,22 @@ function offset_mV = measure_volt_offset_(s_volt)
     samples = zeros(1, 200);
     n       = 0;
     t_end   = tic;
+=======
+    % ブロワー停止状態で R6441B を 5 秒間読み取り、電圧オフセットを計測する
+    %
+    %   s_volt    : serialport オブジェクト（R6441B）
+    %
+    % 返値:
+    %   offset_mV : 計測したオフセット [mV]。取得失敗時は NaN を返す。
+
+    MEAS_SEC = 5;   % 計測時間 [秒]
+
+    fprintf('[オフセット計測] 無風時の差圧電圧を %.0f 秒間計測します...\n', MEAS_SEC);
+
+    samples = zeros(1, 200);
+    n = 0;
+    t_end = tic;
+>>>>>>> Stashed changes
 
     while toc(t_end) < MEAS_SEC
         try
@@ -511,7 +545,11 @@ function offset_mV = measure_volt_offset_(s_volt)
     fprintf('\n');
 
     if n == 0
+<<<<<<< Updated upstream
         warning('windy:offset', '[オフセット計測] サンプルを取得できませんでした。');
+=======
+        warning('[オフセット計測] サンプルを取得できませんでした。');
+>>>>>>> Stashed changes
         offset_mV = NaN;
         return
     end
