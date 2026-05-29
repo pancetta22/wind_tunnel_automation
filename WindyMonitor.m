@@ -56,6 +56,10 @@ classdef WindyMonitor < handle
         BAR_X1          % バー右端
         BAR_Y0          % バー下端
         BAR_Y1          % バー上端
+
+        % 一時停止
+        paused_         % logical — 一時停止フラグ
+        btn_pause_      % uicontrol — 一時停止/再開ボタン
     end
 
     methods
@@ -171,6 +175,14 @@ classdef WindyMonitor < handle
         end
 
         % ============================================================
+        %  一時停止フラグ取得
+        % ============================================================
+        function ok = isPaused(obj)
+            if ~obj.is_open_(), ok = false; return; end
+            ok = obj.paused_;
+        end
+
+        % ============================================================
         %  フェーズ名更新
         % ============================================================
         function setPhase(obj, phase)
@@ -208,6 +220,9 @@ classdef WindyMonitor < handle
             BAR_FG   = [0.18 0.65 0.18];
             VOLT_CLR = [0.10 0.10 0.60];
 
+            % ---- 一時停止フラグ初期化 ----
+            obj.paused_ = false;
+
             % ---- Figure ----
             obj.fig_ = figure( ...
                 'Name',        'Windy — 風洞実験モニタ', ...
@@ -218,6 +233,18 @@ classdef WindyMonitor < handle
                 'ToolBar',     'none', ...
                 'Resize',      'off', ...
                 'CloseRequestFcn', @(~,~) obj.close());
+
+            % ---- 一時停止ボタン（ヘッダ右側）----
+            obj.btn_pause_ = uicontrol(obj.fig_, ...
+                'Style',           'togglebutton', ...
+                'String',          '一時停止', ...
+                'Units',           'normalized', ...
+                'Position',        [0.77, 0.895, 0.20, 0.065], ...
+                'FontSize',        10, ...
+                'FontWeight',      'bold', ...
+                'BackgroundColor', [0.95, 0.75, 0.20], ...
+                'ForegroundColor', [0.00, 0.00, 0.00], ...
+                'Callback',        @(src,~) obj.toggle_pause_(src));
 
             % ---- ヘッダ（青帯）----
             obj.ax_hdr_ = axes('Parent', obj.fig_, ...
@@ -311,6 +338,23 @@ classdef WindyMonitor < handle
 
         function ok = is_open_(obj)
             ok = ~isempty(obj.fig_) && ishandle(obj.fig_) && isvalid(obj.fig_);
+        end
+
+        % ============================================================
+        %  一時停止ボタン コールバック
+        % ============================================================
+        function toggle_pause_(obj, src)
+            obj.paused_ = logical(src.Value);
+            if obj.paused_
+                src.String          = '再  開';
+                src.BackgroundColor = [0.85, 0.20, 0.20];
+                src.ForegroundColor = [1.00, 1.00, 1.00];
+            else
+                src.String          = '一時停止';
+                src.BackgroundColor = [0.95, 0.75, 0.20];
+                src.ForegroundColor = [0.00, 0.00, 0.00];
+            end
+            drawnow
         end
 
     end % methods (private)

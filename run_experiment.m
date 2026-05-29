@@ -81,6 +81,25 @@ fprintf('[記録] 気象条件を保存: %s\n\n', log_fname);
 confirm_blower_(phase);
 
 % =====================================================================
+%  4.5. 差圧センサ電圧オフセット自動計測（無風フェーズのみ）
+% =====================================================================
+if contains(phase, 'ofst')
+    ans_offset = input('差圧センサの電圧オフセットを今計測しますか？ [y/N]: ', 's');
+    if strcmpi(strtrim(ans_offset), 'y')
+        measured_offset = measure_volt_offset_(s_volt);
+        if ~isnan(measured_offset)
+            met.volt_offset_mV = measured_offset;
+            save_experiment_log_(log_path, date_str, met);
+            fprintf('[更新] experiment_log.json を更新 (volt_offset_mV = %.4f mV)\n\n', measured_offset);
+        else
+            fprintf('[警告] オフセット計測失敗 — config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
+        end
+    else
+        fprintf('[スキップ] config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
+    end
+end
+
+% =====================================================================
 %  5. 計測ループ
 % =====================================================================
 pts      = build_measurement_sequence_(phase);
@@ -92,6 +111,16 @@ fprintf('\n=== %s フェーズ開始 (%d 点) ===\n\n', phase, n_total);
 try
     for idx = 1:n_total
         pt = pts(idx);
+
+        % ------ 一時停止チェック ------
+        if monitor.isPaused()
+            fprintf('[一時停止] WindyMonitor の「再開」ボタンを押すと計測を再開します...\n');
+            while monitor.isPaused()
+                pause(0.2);
+                drawnow;
+            end
+            fprintf('[再開] 計測を再開します。\n\n');
+        end
 
         % ------ a. 迎角ステージ移動 ------
         fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
@@ -448,4 +477,45 @@ function save_experiment_log_(filepath, date_str, met)
     end
     fprintf(fid, '%s\n', jsonencode(log));
     fclose(fid);
+end
+
+function offset_mV = measure_volt_offset_(s_volt)
+    % 無風時の差圧電圧を5秒間計測し、平均値をオフセットとして返す
+    %
+    % 返値:
+    %   offset_mV : 電圧オフセット [mV]（計測失敗時は NaN）
+
+    MEAS_SEC = 5;
+    fprintf('[オフセット計測] 無風時の差圧電圧を %.0f 秒間計測します...\n', MEAS_SEC);
+
+    samples = zeros(1, 200);
+    n       = 0;
+    t_end   = tic;
+
+    while toc(t_end) < MEAS_SEC
+        try
+            writeline(s_volt, 'MD?');
+            raw  = readline(s_volt);
+            v_mv = str2double(strtrim(raw)) * 1000;   % V → mV
+            if ~isnan(v_mv)
+                n = n + 1;
+                if n > numel(samples)
+                    samples = [samples, zeros(1, 100)]; %#ok<AGROW>
+                end
+                samples(n) = v_mv;
+                fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
+            end
+        catch
+        end
+    end
+    fprintf('\n');
+
+    if n == 0
+        warning('windy:offset', '[オフセット計測] サンプルを取得できませんでした。');
+        offset_mV = NaN;
+        return
+    end
+
+    offset_mV = mean(samples(1:n));
+    fprintf('  → 電圧オフセット = %+.4f mV  (%d サンプル)\n\n', offset_mV, n);
 end
