@@ -1,8 +1,18 @@
 {
-  "python_exe": "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
-  "leptrino_port": 5,
-  "qt_adl1_port": "COM7",
-  "r6441b_port": "COM6",
-  "r6441b_n_samples": 100,
-  "r6441b_timeout_sec": 5
+  "python_exe":                  "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
+  "leptrino_port":               5,
+  "qt_adl1_port":                "COM7",
+  "r6441b_port":                 "COM6",
+  "r6441b_timeout_sec":          5,
+
+  "output_dir":                  "C:/Users/<YourName>/WindyData",
+  "force_sensor_size_limit_kb":  1000,
+  "angle_settle_sec":            2.0,
+  "csv_decimal_places":          null,
+
+  "_comment_windspeed":          "以下は差圧センサ→風速の変換に使用する校正定数（センサ交換・再校正時のみ変更）",
+  "water_density":               0.99704,
+  "volt_offset_mV":              -5.0,
+  "calib_a":                     0.007904809948345278,
+  "calib_b":                     -0.340200009144243
 }
