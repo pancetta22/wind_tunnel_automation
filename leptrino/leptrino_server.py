@@ -112,7 +112,18 @@ if args.mode == "avg":
     print(json.dumps(result))
 
 # ========================================================
-#  stream モード（新規）: 時系列CSVを書き出し、サイズ上限で終了
+#  stream モード: 時系列CSVを書き出し、サイズ上限で終了
+#
+#  【修正点】SetSerialMode直後はDLL内部バッファに古いデータが
+#  蓄積しており、ループ開始直後だけ高速（3000Hz超）で返ってしまう。
+#  これをドレイン（flush）してからt=0を決定することで、
+#  ファイル先頭から均一な~1200Hzのタイムスタンプが記録される。
+#
+#  固定タイマ（ビジーウェイト）は使わない。
+#  GetSerialDataはセンサの更新を待って返るため、
+#  タイトループで呼ぶだけで自然にセンサレート（~1200Hz）に追従する。
+#  固定タイマを使うとセンサの実レートとのズレがビート周波数として
+#  スペクトルに偽ピークを生む（フラッター計測では致命的）。
 # ========================================================
 elif args.mode == "stream":
     if not args.output:
@@ -146,34 +157,75 @@ elif args.mode == "stream":
     f.write("経過時間[sec],Fx[N],Fy[N],Fz[N],Mx[Nm],My[Nm],Mz[Nm]\n")
     f.flush()
 
+    # ----------------------------------------------------------
+    #  ① 起動直後のバッファドレイン
+    #
+    #  SetSerialMode(True) 後、DLL内部バッファには
+    #  time.sleep(0.2) の 0.2秒分（≈240サンプル）の古いデータが
+    #  蓄積している。これを読み捨ててから計測を開始しないと、
+    #  ファイル先頭だけ異常に短い時刻間隔（3000Hz超）が記録される。
+    #
+    #  DRAIN_SEC = 0.05 s → 約60サンプル分を読み捨て。
+    #  0.2秒バッファを完全に吐き出すには0.2sで十分だが、
+    #  ここでは安全マージンを取り0.05sを追加ドレインとして使う。
+    #  （time.sleep(0.2)の後なので残留は少量）
+    # ----------------------------------------------------------
+    DRAIN_SEC = 0.05
+    t_drain = time.perf_counter()
+    while time.perf_counter() - t_drain < DRAIN_SEC:
+        dll.GetSerialData(PORT, Data, ctypes.byref(Status))
+
+    # ドレイン完了後、次の「新鮮な」サンプルが来るまで待つ。
+    # これにより t=0 がセンサ更新タイミングと一致する。
+    while not dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
+        pass
+
+    # ----------------------------------------------------------
+    #  ② 計測開始（ここが真の t=0）
+    # ----------------------------------------------------------
     sample_count = 0
     t_start = time.perf_counter()
 
     # ファイルサイズチェックは毎サンプルではなく 120サンプルに1回（約0.1秒ごと）
     CHECK_INTERVAL = 120
 
+    # ----------------------------------------------------------
+    #  ③ イベント駆動ループ
+    #
+    #  sleep や固定タイマは一切使わない。
+    #  GetSerialData がセンサの更新ごとに True を返すので、
+    #  タイトループで呼ぶだけでセンサレートに自然追従する。
+    #  False が返った場合（センサ未更新）は即リトライ。
+    # ----------------------------------------------------------
     try:
         while True:
-            if dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
-                elapsed = time.perf_counter() - t_start
+            if not dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
+                # センサがまだ更新していない → 即リトライ
+                continue
 
-                # 物理量に変換
-                phys = [limit_list[i] / 10000.0 * Data[i] for i in range(6)]
+            elapsed = time.perf_counter() - t_start
 
-                # SPEC準拠フォーマット: 時間=小数4桁, F=小数3桁, M=小数4桁
-                line = "{:.4f},{:.3f},{:.3f},{:.3f},{:.4f},{:.4f},{:.4f}\n".format(
-                    elapsed,
-                    phys[0], phys[1], phys[2],
-                    phys[3], phys[4], phys[5],
-                )
-                f.write(line)
-                f.flush()
-                sample_count += 1
+            # 物理量に変換
+            phys = [limit_list[i] / 10000.0 * Data[i] for i in range(6)]
 
-                # ファイルサイズ確認
-                if sample_count % CHECK_INTERVAL == 0:
-                    if os.path.getsize(args.output) >= size_limit_bytes:
-                        break
+            # SPEC準拠フォーマット: 時間=小数4桁, F=小数3桁, M=小数4桁
+            line = "{:.4f},{:.3f},{:.3f},{:.3f},{:.4f},{:.4f},{:.4f}\n".format(
+                elapsed,
+                phys[0],
+                phys[1],
+                phys[2],
+                phys[3],
+                phys[4],
+                phys[5],
+            )
+            f.write(line)
+            f.flush()
+            sample_count += 1
+
+            # ファイルサイズ確認
+            if sample_count % CHECK_INTERVAL == 0:
+                if os.path.getsize(args.output) >= size_limit_bytes:
+                    break
 
     finally:
         f.close()
