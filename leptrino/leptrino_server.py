@@ -165,12 +165,14 @@ elif args.mode == "stream":
     #  蓄積している。これを読み捨ててから計測を開始しないと、
     #  ファイル先頭だけ異常に短い時刻間隔（3000Hz超）が記録される。
     #
-    #  DRAIN_SEC = 0.05 s → 約60サンプル分を読み捨て。
-    #  0.2秒バッファを完全に吐き出すには0.2sで十分だが、
-    #  ここでは安全マージンを取り0.05sを追加ドレインとして使う。
-    #  （time.sleep(0.2)の後なので残留は少量）
+    #  DRAIN_SEC = 0.25 s
+    #  SetSerialMode(True) 直前の time.sleep(0.2) の間に
+    #  センサは既にデータを送り続けており、DLL内部バッファには
+    #  約 1200Hz × 0.2s = 240サンプル分が蓄積している。
+    #  これを完全に吐き出すには最低0.2秒のドレインが必要。
+    #  安全マージン0.05秒を加えて 0.25秒とする。
     # ----------------------------------------------------------
-    DRAIN_SEC = 0.05
+    DRAIN_SEC = 0.25
     t_drain = time.perf_counter()
     while time.perf_counter() - t_drain < DRAIN_SEC:
         dll.GetSerialData(PORT, Data, ctypes.byref(Status))
