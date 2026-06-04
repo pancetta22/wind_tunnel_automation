@@ -2,7 +2,11 @@ classdef WindyMonitor < handle
 % WindyMonitor  風洞実験リアルタイムモニタリング表示クラス
 %
 % MATLAB Figure ウィンドウに計測状況をリアルタイム表示する。
-% drawnow limitrate を用いて計測ループのブロッキングを最小化する。
+%
+% 6軸グラフはメインループとは独立した timer で更新するため、
+% デジボルの readline ブロッキングに影響されない。
+% グラフは直近 N_DISP_ROWS 行（~0.5 秒分）をローリング表示し、
+% 振動波形がオシロスコープのように確認できる。
 %
 % レイアウト:
 %   ┌─────────────────────────────────────────────┐
@@ -16,10 +20,11 @@ classdef WindyMonitor < handle
 %
 % 使い方（run_experiment.m から）:
 %   monitor = WindyMonitor(cfg.force_sensor_size_limit_kb);
+%   monitor.setDataSource(@() logger.getRecentRows(600));  ← 一度だけ設定
 %   monitor.setPhase('Pofst');
-%   monitor.resetGraph();   ← 各計測点の開始前
-%   monitor.update(angle, logger.getLatest(), v_mv, progress);   ← ループ内
-%   monitor.close();        ← 終了時
+%   monitor.resetGraph();                  ← 各計測点の開始前
+%   monitor.update(angle, v_mv, progress); ← 電圧ループ内（6軸グラフ更新不要）
+%   monitor.close();                       ← 終了時
 
     properties (Access = private)
         % Figure
@@ -44,22 +49,30 @@ classdef WindyMonitor < handle
         txt_size_
         patch_fill_
 
-        % データバッファ（計測点ごとにリセット）
-        buf_n_          % 6軸サンプル数
+        % デジボルバッファ（計測点ごとにリセット）
         buf_nv_         % 電圧サンプル数
-        buf_F_          % M×6  [Fx Fy Fz Mx My Mz]（M は事前確保サイズ）
         buf_v_          % 1×M  差圧電圧 [mV]
 
         % 定数
         sizeLimitKB_
-        BAR_X0          % バー左端（axes 正規化座標）
-        BAR_X1          % バー右端
-        BAR_Y0          % バー下端
-        BAR_Y1          % バー上端
+        BAR_X0
+        BAR_X1
+        BAR_Y0
+        BAR_Y1
 
         % 一時停止
-        paused_         % logical — 一時停止フラグ
-        btn_pause_      % uicontrol — 一時停止/再開ボタン
+        paused_
+        btn_pause_
+
+        % 6軸グラフ独立タイマ
+        force_logger_fn_    % function handle: @() logger.getRecentRows(N)
+        force_timer_        % timer オブジェクト
+    end
+
+    % 表示する直近サンプル数（~1200 Hz × 0.5 s）
+    properties (Constant, Access = private)
+        N_DISP_ROWS = 600
+        TIMER_PERIOD = 0.15   % 6軸グラフ更新間隔 [s]（~7 Hz）
     end
 
     methods
@@ -71,31 +84,43 @@ classdef WindyMonitor < handle
             if nargin < 1, sizeLimitKB = 1000; end
             obj.sizeLimitKB_ = sizeLimitKB;
 
-            % バッファ初期確保（~600サンプル/計測点で十分）
-            obj.buf_n_  = 0;
             obj.buf_nv_ = 0;
-            obj.buf_F_  = zeros(600, 6);
             obj.buf_v_  = zeros(1, 600);
 
-            % バー座標（ax_btm_ の正規化座標系）
             obj.BAR_X0 = 0.02;
             obj.BAR_X1 = 0.98;
             obj.BAR_Y0 = 0.03;
             obj.BAR_Y1 = 0.42;
 
+            obj.force_logger_fn_ = [];
+            obj.force_timer_     = [];
+
             obj.init_figure_();
         end
 
         % ============================================================
-        %  全パネル一括更新（計測ループ内から呼ぶ）
+        %  6軸データソース登録（計測開始前に一度だけ呼ぶ）
         % ============================================================
-        function update(obj, angle, sensorData, voltage, progress)
-            % update(angle, sensorData, voltage, progress)
-            %
-            %   angle      : 現在の迎角 [度]（整数）
-            %   sensorData : 1×6  [Fx Fy Fz Mx My Mz]  (getLatest() の戻り値)
-            %   voltage    : スカラー  最新差圧電圧 [mV]
-            %   progress   : struct(idx, total, size_kb, limit_kb)
+        function setDataSource(obj, logger_fn)
+            % logger_fn: @() logger.getRecentRows(N) 形式の function handle
+            if ~obj.is_open_(), return; end
+            obj.force_logger_fn_ = logger_fn;
+            if ~isempty(obj.force_timer_) && isvalid(obj.force_timer_)
+                if strcmp(obj.force_timer_.Running, 'off')
+                    start(obj.force_timer_);
+                end
+            end
+        end
+
+        % ============================================================
+        %  電圧・進捗の更新（計測ループ内から呼ぶ）
+        %  6軸グラフは timer が独立して更新するためここでは不要
+        % ============================================================
+        function update(obj, angle, voltage, progress)
+            % update(angle, voltage, progress)
+            %   angle    : 現在の迎角 [度]
+            %   voltage  : 最新差圧電圧 [mV]
+            %   progress : struct(idx, total, size_kb, limit_kb)
 
             if ~obj.is_open_(), return; end
 
@@ -103,23 +128,6 @@ classdef WindyMonitor < handle
             set(obj.txt_angle_,    'String', sprintf('%+d°', angle));
             set(obj.txt_progress_, 'String', ...
                 sprintf('%d / %d  点', progress.idx, progress.total));
-
-            % ---- 6軸グラフ ----
-            if numel(sensorData) == 6 && any(sensorData ~= 0)
-                obj.buf_n_ = obj.buf_n_ + 1;
-                n = obj.buf_n_;
-                if n > size(obj.buf_F_, 1)
-                    obj.buf_F_ = [obj.buf_F_; zeros(300, 6)];
-                end
-                obj.buf_F_(n, :) = sensorData(:)';
-                x = 1:n;
-                set(obj.ln_Fx_, 'XData', x, 'YData', obj.buf_F_(1:n, 1));
-                set(obj.ln_Fy_, 'XData', x, 'YData', obj.buf_F_(1:n, 2));
-                set(obj.ln_Fz_, 'XData', x, 'YData', obj.buf_F_(1:n, 3));
-                set(obj.ln_Mx_, 'XData', x, 'YData', obj.buf_F_(1:n, 4));
-                set(obj.ln_My_, 'XData', x, 'YData', obj.buf_F_(1:n, 5));
-                set(obj.ln_Mz_, 'XData', x, 'YData', obj.buf_F_(1:n, 6));
-            end
 
             % ---- デジボル ----
             if isscalar(voltage) && ~isnan(voltage)
@@ -153,11 +161,10 @@ classdef WindyMonitor < handle
         function resetGraph(obj)
             if ~obj.is_open_(), return; end
 
-            obj.buf_n_  = 0;
             obj.buf_nv_ = 0;
-            obj.buf_F_(:, :) = 0;
-            obj.buf_v_(:)    = 0;
+            obj.buf_v_(:) = 0;
 
+            % 6軸グラフをクリア（timer が次のティックで新データを描画する）
             set(obj.ln_Fx_, 'XData', NaN, 'YData', NaN);
             set(obj.ln_Fy_, 'XData', NaN, 'YData', NaN);
             set(obj.ln_Fz_, 'XData', NaN, 'YData', NaN);
@@ -195,6 +202,12 @@ classdef WindyMonitor < handle
         %  終了
         % ============================================================
         function close(obj)
+            % timer を停止・削除してから Figure を閉じる
+            if ~isempty(obj.force_timer_) && isvalid(obj.force_timer_)
+                stop(obj.force_timer_);
+                delete(obj.force_timer_);
+            end
+            obj.force_timer_ = [];
             if ~isempty(obj.fig_) && ishandle(obj.fig_)
                 delete(obj.fig_);
             end
@@ -220,10 +233,8 @@ classdef WindyMonitor < handle
             BAR_FG   = [0.18 0.65 0.18];
             VOLT_CLR = [0.10 0.10 0.60];
 
-            % ---- 一時停止フラグ初期化 ----
             obj.paused_ = false;
 
-            % ---- Figure ----
             obj.fig_ = figure( ...
                 'Name',        'Windy — 風洞実験モニタ', ...
                 'NumberTitle', 'off', ...
@@ -234,7 +245,7 @@ classdef WindyMonitor < handle
                 'Resize',      'off', ...
                 'CloseRequestFcn', @(~,~) obj.close());
 
-            % ---- 一時停止ボタン（ヘッダ右側）----
+            % ---- 一時停止ボタン ----
             obj.btn_pause_ = uicontrol(obj.fig_, ...
                 'Style',           'togglebutton', ...
                 'String',          '一時停止', ...
@@ -246,7 +257,7 @@ classdef WindyMonitor < handle
                 'ForegroundColor', [0.00, 0.00, 0.00], ...
                 'Callback',        @(src,~) obj.toggle_pause_(src));
 
-            % ---- ヘッダ（青帯）----
+            % ---- ヘッダ ----
             obj.ax_hdr_ = axes('Parent', obj.fig_, ...
                 'Position', [0.00, 0.87, 1.00, 0.13], ...
                 'Color',    HDR_CLR, ...
@@ -262,7 +273,7 @@ classdef WindyMonitor < handle
                 'FontSize', 38, 'FontWeight', 'bold', 'Color', TXT_WHT, ...
                 'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle');
 
-            obj.txt_progress_ = text(obj.ax_hdr_, 0.98, 0.50, '0 / 61  点', ...
+            obj.txt_progress_ = text(obj.ax_hdr_, 0.71, 0.50, '0 / 61  点', ...
                 'FontSize', 14, 'Color', TXT_WHT, ...
                 'HorizontalAlignment', 'right', 'VerticalAlignment', 'middle');
 
@@ -272,13 +283,13 @@ classdef WindyMonitor < handle
             hold(obj.ax_force_, 'on');
             grid(obj.ax_force_, 'on');
             obj.ln_Fx_ = line(obj.ax_force_, NaN, NaN, ...
-                'Color', [0.85 0.33 0.10], 'LineWidth', 1.4, 'DisplayName', 'Fx');
+                'Color', [0.85 0.33 0.10], 'LineWidth', 1.0, 'DisplayName', 'Fx');
             obj.ln_Fy_ = line(obj.ax_force_, NaN, NaN, ...
-                'Color', [0.47 0.67 0.19], 'LineWidth', 1.4, 'DisplayName', 'Fy');
+                'Color', [0.47 0.67 0.19], 'LineWidth', 1.0, 'DisplayName', 'Fy');
             obj.ln_Fz_ = line(obj.ax_force_, NaN, NaN, ...
-                'Color', [0.00 0.45 0.74], 'LineWidth', 1.4, 'DisplayName', 'Fz');
+                'Color', [0.00 0.45 0.74], 'LineWidth', 1.0, 'DisplayName', 'Fz');
             legend(obj.ax_force_, 'Location', 'northwest', 'FontSize', 9);
-            xlabel(obj.ax_force_, 'サンプル番号', 'FontSize', 9);
+            xlabel(obj.ax_force_, '時間 [s]', 'FontSize', 9);
             ylabel(obj.ax_force_, '[N]', 'FontSize', 10);
             title(obj.ax_force_,  'Fx  /  Fy  /  Fz', 'FontSize', 11);
 
@@ -288,17 +299,17 @@ classdef WindyMonitor < handle
             hold(obj.ax_moment_, 'on');
             grid(obj.ax_moment_, 'on');
             obj.ln_Mx_ = line(obj.ax_moment_, NaN, NaN, ...
-                'Color', [0.85 0.33 0.10], 'LineWidth', 1.4, 'DisplayName', 'Mx');
+                'Color', [0.85 0.33 0.10], 'LineWidth', 1.0, 'DisplayName', 'Mx');
             obj.ln_My_ = line(obj.ax_moment_, NaN, NaN, ...
-                'Color', [0.47 0.67 0.19], 'LineWidth', 1.4, 'DisplayName', 'My');
+                'Color', [0.47 0.67 0.19], 'LineWidth', 1.0, 'DisplayName', 'My');
             obj.ln_Mz_ = line(obj.ax_moment_, NaN, NaN, ...
-                'Color', [0.00 0.45 0.74], 'LineWidth', 1.4, 'DisplayName', 'Mz');
+                'Color', [0.00 0.45 0.74], 'LineWidth', 1.0, 'DisplayName', 'Mz');
             legend(obj.ax_moment_, 'Location', 'northwest', 'FontSize', 9);
-            xlabel(obj.ax_moment_, 'サンプル番号', 'FontSize', 9);
+            xlabel(obj.ax_moment_, '時間 [s]', 'FontSize', 9);
             ylabel(obj.ax_moment_, '[Nm]', 'FontSize', 10);
             title(obj.ax_moment_,  'Mx  /  My  /  Mz', 'FontSize', 11);
 
-            % ---- 下部パネル（デジボル + サイズバー）----
+            % ---- 下部パネル ----
             obj.ax_btm_ = axes('Parent', obj.fig_, ...
                 'Position', [0.04, 0.03, 0.92, 0.29], ...
                 'Color',  FIG_BG, ...
@@ -307,7 +318,6 @@ classdef WindyMonitor < handle
                 'XTick', [], 'YTick', [], 'Box', 'off');
             hold(obj.ax_btm_, 'on');
 
-            % デジボルテキスト
             obj.txt_volt_cur_ = text(obj.ax_btm_, 0.02, 0.88, '現在値   --- mV', ...
                 'FontSize', 14, 'FontWeight', 'bold', 'Color', VOLT_CLR, ...
                 'VerticalAlignment', 'middle');
@@ -315,29 +325,56 @@ classdef WindyMonitor < handle
                 'FontSize', 13, 'Color', VOLT_CLR, ...
                 'VerticalAlignment', 'middle');
 
-            % ファイルサイズラベル
             obj.txt_size_ = text(obj.ax_btm_, 0.02, 0.51, ...
                 sprintf('6軸センサ   0 KB / %.0f KB', obj.sizeLimitKB_), ...
                 'FontSize', 11, 'Color', [0.35 0.35 0.35], ...
                 'VerticalAlignment', 'middle');
 
-            % バー背景
             patch(obj.ax_btm_, ...
                 [obj.BAR_X0, obj.BAR_X1, obj.BAR_X1, obj.BAR_X0], ...
                 [obj.BAR_Y0, obj.BAR_Y0, obj.BAR_Y1, obj.BAR_Y1], ...
                 BAR_BG, 'EdgeColor', 'none');
 
-            % バー塗り（初期幅ゼロ）
             obj.patch_fill_ = patch(obj.ax_btm_, ...
                 repmat(obj.BAR_X0, 1, 4), ...
                 [obj.BAR_Y0, obj.BAR_Y0, obj.BAR_Y1, obj.BAR_Y1], ...
                 BAR_FG, 'EdgeColor', 'none');
+
+            % ---- 6軸グラフ独立タイマ（setDataSource で start する）----
+            obj.force_timer_ = timer( ...
+                'ExecutionMode', 'fixedSpacing', ...
+                'Period',         obj.TIMER_PERIOD, ...
+                'TimerFcn',      @(~,~) obj.refresh_force_());
 
             drawnow
         end
 
         function ok = is_open_(obj)
             ok = ~isempty(obj.fig_) && ishandle(obj.fig_) && isvalid(obj.fig_);
+        end
+
+        % ============================================================
+        %  タイマコールバック: 6軸グラフをローリング更新
+        % ============================================================
+        function refresh_force_(obj)
+            if ~obj.is_open_() || isempty(obj.force_logger_fn_), return; end
+            try
+                rows = obj.force_logger_fn_();   % n×7: [t Fx Fy Fz Mx My Mz]
+                n = size(rows, 1);
+                if n < 2, return; end
+
+                t = rows(:, 1) - rows(1, 1);    % 先頭を 0 に正規化
+                set(obj.ln_Fx_, 'XData', t, 'YData', rows(:, 2));
+                set(obj.ln_Fy_, 'XData', t, 'YData', rows(:, 3));
+                set(obj.ln_Fz_, 'XData', t, 'YData', rows(:, 4));
+                set(obj.ln_Mx_, 'XData', t, 'YData', rows(:, 5));
+                set(obj.ln_My_, 'XData', t, 'YData', rows(:, 6));
+                set(obj.ln_Mz_, 'XData', t, 'YData', rows(:, 7));
+
+                drawnow limitrate
+            catch
+                % 描画エラーは無視（計測ループを止めない）
+            end
         end
 
         % ============================================================

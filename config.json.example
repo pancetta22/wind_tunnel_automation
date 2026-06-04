@@ -11,7 +11,7 @@
   "csv_decimal_places":          null,
 
   "_comment_windspeed":          "以下は差圧センサ→風速の変換に使用する校正定数（センサ交換・再校正時のみ変更）",
-  "water_density":               0.99704,
+  "_comment_water_density":      "水密度は気温から Kell の式で自動計算されるため不要",
   "volt_offset_mV":              -5.0,
   "calib_a":                     0.007904809948345278,
   "calib_b":                     -0.340200009144243

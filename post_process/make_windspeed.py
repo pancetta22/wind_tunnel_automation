@@ -206,7 +206,7 @@ def main():
             print(f"[警告] {fname} が見つかりません。スキップします。")
             continue
 
-        df = pd.read_csv(fpath, encoding="utf-8")
+        df = pd.read_csv(fpath, encoding="utf-8-sig")
 
         required = ["name", "差圧電圧[mV]"]
         missing = [c for c in required if c not in df.columns]

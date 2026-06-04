@@ -169,34 +169,45 @@ classdef LeptrinoLogger < handle
         end
 
         function data = getLatest(obj)
-            % CSV の末尾から最新の [Fx Fy Fz Mx My Mz] を読み取って返す
-            % WindyMonitor のリアルタイム表示用
-            % ファイルが読み取れない場合は zeros(1,6) を返す
-            data = zeros(1, 6);
-            if isempty(obj.filepath_) || ~isfile(obj.filepath_)
-                return;
+            % 後方互換用: getRecentRows(1) のラッパー
+            rows = obj.getRecentRows(1);
+            if isempty(rows)
+                data = zeros(1, 6);
+            else
+                data = rows(end, 2:7);
             end
+        end
+
+        function rows = getRecentRows(obj, n_rows)
+            % CSV の末尾から最新 n_rows 行を読み取って n×7 行列で返す
+            %   列: [elapsed_s, Fx, Fy, Fz, Mx, My, Mz]
+            % WindyMonitor のリアルタイム表示用（振動波形の確認に使う）
+            rows = zeros(0, 7);
+            if isempty(obj.filepath_) || ~isfile(obj.filepath_), return; end
             try
                 fid = fopen(obj.filepath_, 'r', 'n', 'CP932');
                 if fid < 0, return; end
-                % ファイル末尾付近 200 バイトを読む（1行は最大 ~60 バイト）
                 fseek(fid, 0, 'eof');
                 file_size  = ftell(fid);
-                read_bytes = min(300, file_size);
+                read_bytes = min(n_rows * 64, file_size);  % 1行 ~60 bytes
                 fseek(fid, -read_bytes, 'eof');
                 tail = fread(fid, read_bytes, 'char=>char')';
                 fclose(fid);
-                % 改行で分割し、後ろから数値7列の行を探す
+
                 lines = strsplit(strtrim(tail), newline);
-                for k = numel(lines):-1:1
+                buf   = zeros(numel(lines), 7);
+                count = 0;
+                for k = 1:numel(lines)
                     vals = sscanf(lines{k}, '%f,%f,%f,%f,%f,%f,%f');
                     if numel(vals) == 7
-                        data = vals(2:7)';  % 時間列を除く [Fx Fy Fz Mx My Mz]
-                        return;
+                        count = count + 1;
+                        buf(count, :) = vals';
                     end
                 end
+                if count == 0, return; end
+                % 末尾 n_rows 行だけ返す
+                rows = buf(max(1, count - n_rows + 1):count, :);
             catch
-                % 読み取り失敗は無視
             end
         end
 
