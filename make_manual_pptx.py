@@ -269,12 +269,13 @@ y0 = Inches(1.05)
 add_label_box(slide, "📄 config.json の設定",
               C_GREEN, C_GREEN_LIGHT, C_GREEN,
               [
-                  'output_dir   : データ保存先のルートフォルダ',
-                  '               例) "C:/Users/xxx/WindyData"',
+                  'output_dir    : データ保存先のルートフォルダ',
+                  '                例) "C:/Users/xxx/WindyData"',
                   'leptrino_port : Leptrino の COM ポート番号',
                   'qt_adl1_port  : 迎角ステージの COM ポート',
                   'r6441b_port   : デジボルの COM ポート',
-                  'python_exe    : Python の実行ファイルパス',
+                  'python_exe    : 32bit Python（計測用）のパス',
+                  'python_exe_64 : 64bit Python（後処理用）のパス',
                   '',
                   'calib_a / calib_b : 較正定数（通常変更不要）',
               ],
@@ -458,10 +459,8 @@ add_label_box(slide, "👤 無風フェーズ（Pofst / Mofst）の確認",
               [], Inches(0.4), y0, Inches(6.0), Inches(5.65))
 
 ofst_steps = [
-    ("Step 1", "電圧オフセット計測の確認",
-     "「差圧センサの電圧オフセットを\n今計測しますか？ [y/N]: 」\n\n→ y を入力：5秒間の無風電圧を自動計測\n→ N を入力：config.json の設定値を使用"),
-    ("Step 2", "ブロワー停止の確認",
-     "「ブロワーが停止していることを\n確認してください。\nEnter を押してください: 」\n\n→ ブロワー停止を確認して Enter"),
+    ("Step 1", "ブロワー停止の確認",
+     "「ブロワーが停止していることを\n確認してください。\nEnter を押してください: 」\n\n→ ブロワー停止を確認して Enter\n\n※ Pofst の直前にのみ、差圧センサの\n   電圧オフセットが自動計測されます\n   （ユーザー操作不要）"),
 ]
 for i, (step, ttl, body) in enumerate(ofst_steps):
     sy = y0 + Inches(0.42) + i * Inches(2.45)
@@ -559,7 +558,7 @@ add_label_box(slide, "⚙ モニター画面（WindyMonitor）の表示内容",
                   "・6軸センサの振動波形（直近0.5秒をオシロスコープ的に表示）",
                   "・差圧電圧のリアルタイム値",
                   "・ファイルサイズ進捗バー（6軸センサ計測の完了度を視覚化）",
-                  "・「一時停止」ボタン（クリックで計測を一時停止・再開できる）",
+                  "・「一時停止」ボタン → 押すと「再開」「停止」の2ボタンが現れる",
               ],
               Inches(0.4), Inches(4.75), Inches(12.5), Inches(2.1),
               content_size=Pt(12))
@@ -576,7 +575,7 @@ user_badge(slide, Inches(10.8), Inches(0.25))
 add_rect(slide, Inches(0.4), Inches(1.05), Inches(12.5), Inches(1.1),
          fill=C_RED_LIGHT, border=C_RED, border_w=Pt(2.0))
 add_text(slide,
-         "⚠  エラー発生時にプログラムが表示するメッセージ（例）",
+         "⚠  エラー発生時 または「停止」ボタン押下時にプログラムが表示するメッセージ（例）",
          Inches(0.6), Inches(1.08), Inches(12.0), Inches(0.35),
          font_size=Pt(12), bold=True, color=C_RED)
 add_text(slide,
@@ -641,6 +640,8 @@ y0 = Inches(1.05)
 add_label_box(slide, "⚙ Step 1：windspeed.csv の生成（make_windspeed.py）",
               C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
               [
+                  "【初回のみ】post_process/venv/ に 64bit Python 仮想環境を自動作成",
+                  "          requirements.txt から pandas / numpy / scipy 等を pip install",
                   "差圧電圧サマリー（Pdata / Mdata の volt_summary.csv）を読み込む",
                   "experiment_log.json から気温・気圧・校正定数を取得",
                   "各計測点の差圧電圧 → 動圧水柱高さ → 風速 U [m/s] を計算",
@@ -701,7 +702,8 @@ add_label_box(slide, "👤 ユーザーが入力・確認すること（全部�
                   "5.  最大迎角を入力   （Enter のみ → 30°）",
                   "6.  開始フェーズを選択   （Enter のみ → 1: Pofst から）",
                   "--- フェーズごとに ---",
-                  "7a. 無風フェーズ → 電圧オフセット計測の要否 [y/N] → ブロワー停止確認 → Enter",
+                  "7a. 無風フェーズ → ブロワー停止確認 → Enter",
+                  "    （Pofst 直前のみ電圧オフセットが自動計測される、操作不要）",
                   "7b. 有風フェーズ → ブロワー起動・風速安定後 → Enter",
               ],
               Inches(0.4), y0, Inches(6.2), Inches(5.75),
