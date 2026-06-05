@@ -1,5 +1,6 @@
 {
   "python_exe":                  "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
+  "python_exe_64":               "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312/python.exe",
   "leptrino_port":               5,
   "qt_adl1_port":                "COM7",
   "r6441b_port":                 "COM6",

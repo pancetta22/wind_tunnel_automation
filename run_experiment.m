@@ -316,6 +316,9 @@ function cfg = load_config_(base_dir)
     if ~isfield(cfg, 'r6441b_timeout_sec') || isempty(cfg.r6441b_timeout_sec)
         cfg.r6441b_timeout_sec = 5;
     end
+    if ~isfield(cfg, 'python_exe_64') || isempty(cfg.python_exe_64)
+        cfg.python_exe_64 = '';
+    end
     if ~isfield(cfg, 'volt_offset_mV') || isempty(cfg.volt_offset_mV)
         cfg.volt_offset_mV = -5.0;
     end
@@ -626,6 +629,7 @@ end
 
 function run_postprocess_if_ready_(exp_dir, date_str, cfg)
     % 全4フェーズの volt_summary が揃っていれば後処理を実行する
+    %   Step 0: post_process/venv が未作成なら 64bit Python で作成・パッケージインストール
     %   Step 1: make_windspeed.py → windspeed.csv
     %   Step 2: calc_force.py    → 空力係数 CSV・グラフ PNG
 
@@ -644,10 +648,19 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg)
     make_ws_path = fullfile(script_dir, 'post_process', 'make_windspeed.py');
     calc_f_path  = fullfile(script_dir, 'post_process', 'calc_force.py');
 
+    % --- Step 0: 仮想環境の準備 ---
+    py64 = cfg.python_exe_64;
+    if isempty(py64)
+        fprintf('[警告] python_exe_64 が config.json に設定されていません。\n');
+        fprintf('         32bit Python (%s) で後処理を試みます。\n\n', cfg.python_exe);
+        py64 = cfg.python_exe;
+    end
+    venv_python = setup_postprocess_venv_(script_dir, py64);
+
     % --- Step 1: windspeed.csv 生成 ---
     fprintf('[後処理 1/2] windspeed.csv を生成中...\n');
     cmd_ws = sprintf('"%s" "%s" --volt_dir "%s" --date %s --out "%s"', ...
-        cfg.python_exe, make_ws_path, exp_dir, date_str, exp_dir);
+        venv_python, make_ws_path, exp_dir, date_str, exp_dir);
     [st1, out1] = system(cmd_ws);
     if ~isempty(strtrim(out1)), fprintf('%s\n', out1); end
     if st1 ~= 0
@@ -658,7 +671,7 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg)
     % --- Step 2: calc_force.py で空力係数・グラフ生成 ---
     fprintf('[後処理 2/2] 空力係数を計算・グラフを出力中...\n');
     prev_dir = cd(exp_dir);
-    [st2, out2] = system(sprintf('"%s" "%s"', cfg.python_exe, calc_f_path));
+    [st2, out2] = system(sprintf('"%s" "%s"', venv_python, calc_f_path));
     cd(prev_dir);
     if ~isempty(strtrim(out2)), fprintf('%s\n', out2); end
     if st2 ~= 0
@@ -667,4 +680,39 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg)
     end
 
     fprintf('[後処理完了] グラフを %s に保存しました。\n\n', exp_dir);
+end
+
+function venv_python = setup_postprocess_venv_(script_dir, python_exe_64)
+    % post_process/venv が未作成なら作成してパッケージをインストールする。
+    % 作成済みの場合はスキップして venv の python パスをそのまま返す。
+
+    venv_dir = fullfile(script_dir, 'post_process', 'venv');
+
+    if ispc
+        venv_python = fullfile(venv_dir, 'Scripts', 'python.exe');
+    else
+        venv_python = fullfile(venv_dir, 'bin', 'python');
+    end
+
+    if isfile(venv_python)
+        return   % 既にセットアップ済み
+    end
+
+    fprintf('[後処理] 仮想環境を作成しています: %s\n', venv_dir);
+    [st, out] = system(sprintf('"%s" -m venv "%s"', python_exe_64, venv_dir));
+    if ~isempty(strtrim(out)), fprintf('%s\n', out); end
+    if st ~= 0 || ~isfile(venv_python)
+        error('[後処理] 仮想環境の作成に失敗しました（終了コード %d）。\npython_exe_64 を確認してください。', st);
+    end
+
+    req_path = fullfile(script_dir, 'post_process', 'requirements.txt');
+    fprintf('[後処理] パッケージをインストールしています（初回のみ）...\n');
+    [st, out] = system(sprintf('"%s" -m pip install --upgrade pip -q && "%s" -m pip install -r "%s"', ...
+        venv_python, venv_python, req_path));
+    if ~isempty(strtrim(out)), fprintf('%s\n', out); end
+    if st ~= 0
+        error('[後処理] パッケージのインストールに失敗しました（終了コード %d）。', st);
+    end
+
+    fprintf('[後処理] 仮想環境のセットアップ完了。\n\n');
 end
