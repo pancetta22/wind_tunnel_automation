@@ -35,25 +35,6 @@ mass_kg      = mass_g / 1000;
 expected_N   = mass_kg * 9.80665;
 fprintf('\n期待値: %.1f g → %.4f N\n\n', mass_g, expected_N);
 
-%% ---- 計測関数 ----
-function F = measure_mean(python_exe, script, port, size_kb, label)
-    tmp = [tempdir, 'weight_check_tmp.csv'];
-    logger = LeptrinoLogger(python_exe, script, port, size_kb);
-    fprintf('[%s] 計測中（約 %d 秒）...', label, round(size_kb/60));
-    logger.start(tmp);
-    while ~logger.isDone(), pause(0.1); end
-    logger.waitForFinish();
-    fprintf(' 完了\n');
-
-    raw = readmatrix(tmp, 'NumHeaderLines', 4, ...
-                     'Delimiter', ',', 'ConsecutiveDelimitersRule', 'join');
-    % 列: [time, Fx, Fy, Fz, Mx, My, Mz]
-    if size(raw, 2) < 7
-        error('CSV の列数が不正です（%d 列）。', size(raw, 2));
-    end
-    F = mean(raw(:, 2:7), 1, 'omitnan');  % [Fx Fy Fz Mx My Mz] 平均
-end
-
 %% ---- Step 1: ゼロ計測 ----
 fprintf('=== Step 1: ゼロ計測（おもりなし） ===\n');
 input('センサが通常の状態であることを確認したら Enter を押してください: ');
@@ -84,4 +65,23 @@ elseif max_val / expected_N > 1.02
     fprintf('→ センサが %.3f 倍 過大計測しています\n', max_val / expected_N);
 else
     fprintf('→ センサが %.3f 倍 過小計測しています\n', max_val / expected_N);
+end
+
+%% ---- 計測関数 ----
+function F = measure_mean(python_exe, script, port, size_kb, label)
+    tmp = [tempdir, 'weight_check_tmp.csv'];
+    logger = LeptrinoLogger(python_exe, script, port, size_kb);
+    fprintf('[%s] 計測中（約 %d 秒）...', label, round(size_kb/60));
+    logger.start(tmp);
+    while ~logger.isDone(), pause(0.1); end
+    logger.waitForFinish();
+    fprintf(' 完了\n');
+
+    raw = readmatrix(tmp, 'NumHeaderLines', 4, ...
+                     'Delimiter', ',', 'ConsecutiveDelimitersRule', 'join');
+    % 列: [time, Fx, Fy, Fz, Mx, My, Mz]
+    if size(raw, 2) < 7
+        error('CSV の列数が不正です（%d 列）。', size(raw, 2));
+    end
+    F = mean(raw(:, 2:7), 1, 'omitnan');  % [Fx Fy Fz Mx My Mz] 平均
 end
