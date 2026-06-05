@@ -91,20 +91,15 @@ while ph_idx <= n_phases
     init_volt_summary_(summary_path);
     fprintf('[準備] デジボルサマリー: %s\n\n', summary_fname);
 
-    % ---- 差圧センサ電圧オフセット自動計測（無風フェーズのみ）----
-    if contains(phase, 'ofst')
-        ans_offset = input('差圧センサの電圧オフセットを今計測しますか？ [y/N]: ', 's');
-        if strcmpi(strtrim(ans_offset), 'y')
-            measured_offset = measure_volt_offset_(s_volt);
-            if ~isnan(measured_offset)
-                met.volt_offset_mV = measured_offset;
-                save_experiment_log_(log_path, date_str, met);
-                fprintf('[更新] experiment_log.json を更新 (volt_offset_mV = %.4f mV)\n\n', measured_offset);
-            else
-                fprintf('[警告] オフセット計測失敗 — config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
-            end
+    % ---- 差圧センサ電圧オフセット自動計測（Pofst の前に1回だけ）----
+    if strcmp(phase, 'Pofst')
+        measured_offset = measure_volt_offset_(s_volt);
+        if ~isnan(measured_offset)
+            met.volt_offset_mV = measured_offset;
+            save_experiment_log_(log_path, date_str, met);
+            fprintf('[更新] experiment_log.json を更新 (volt_offset_mV = %.4f mV)\n\n', measured_offset);
         else
-            fprintf('[スキップ] config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
+            fprintf('[警告] オフセット計測失敗 — config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
         end
     end
 
@@ -126,10 +121,13 @@ while ph_idx <= n_phases
 
         % ------ 一時停止チェック ------
         if monitor.isPaused()
-            fprintf('[一時停止] WindyMonitor の「再開」ボタンを押すと計測を再開します...\n');
+            fprintf('[一時停止] 「再開」または「停止」ボタンを押してください...\n');
             while monitor.isPaused()
                 pause(0.2);
                 drawnow;
+            end
+            if strcmp(monitor.getPauseAction(), 'stop')
+                error('windy:manual_stop', '手動停止が選択されました');
             end
             fprintf('[再開] 計測を再開します。\n\n');
         end

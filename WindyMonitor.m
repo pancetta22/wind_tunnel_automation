@@ -62,7 +62,10 @@ classdef WindyMonitor < handle
 
         % 一時停止
         paused_
+        pause_action_   % 'resume' | 'stop' | ''
         btn_pause_
+        btn_resume_
+        btn_stop_
 
         % 6軸グラフ独立タイマ
         force_logger_fn_    % function handle: @() logger.getRecentRows(N)
@@ -190,6 +193,17 @@ classdef WindyMonitor < handle
         end
 
         % ============================================================
+        %  一時停止後の選択結果（'resume' | 'stop'）
+        % ============================================================
+        function action = getPauseAction(obj)
+            if ~obj.is_open_()
+                action = 'resume';
+                return;
+            end
+            action = obj.pause_action_;
+        end
+
+        % ============================================================
         %  フェーズ名更新
         % ============================================================
         function setPhase(obj, phase)
@@ -233,7 +247,8 @@ classdef WindyMonitor < handle
             BAR_FG   = [0.18 0.65 0.18];
             VOLT_CLR = [0.10 0.10 0.60];
 
-            obj.paused_ = false;
+            obj.paused_       = false;
+            obj.pause_action_ = '';
 
             obj.fig_ = figure( ...
                 'Name',        'Windy — 風洞実験モニタ', ...
@@ -245,9 +260,9 @@ classdef WindyMonitor < handle
                 'Resize',      'off', ...
                 'CloseRequestFcn', @(~,~) obj.close());
 
-            % ---- 一時停止ボタン ----
+            % ---- 一時停止ボタン（通常時） ----
             obj.btn_pause_ = uicontrol(obj.fig_, ...
-                'Style',           'togglebutton', ...
+                'Style',           'pushbutton', ...
                 'String',          '一時停止', ...
                 'Units',           'normalized', ...
                 'Position',        [0.77, 0.895, 0.20, 0.065], ...
@@ -255,7 +270,33 @@ classdef WindyMonitor < handle
                 'FontWeight',      'bold', ...
                 'BackgroundColor', [0.95, 0.75, 0.20], ...
                 'ForegroundColor', [0.00, 0.00, 0.00], ...
-                'Callback',        @(src,~) obj.toggle_pause_(src));
+                'Callback',        @(~,~) obj.on_pause_pressed_());
+
+            % ---- 再開ボタン（一時停止中のみ表示） ----
+            obj.btn_resume_ = uicontrol(obj.fig_, ...
+                'Style',           'pushbutton', ...
+                'String',          '再  開', ...
+                'Units',           'normalized', ...
+                'Position',        [0.77, 0.895, 0.094, 0.065], ...
+                'FontSize',        10, ...
+                'FontWeight',      'bold', ...
+                'BackgroundColor', [0.13, 0.55, 0.13], ...
+                'ForegroundColor', [1.00, 1.00, 1.00], ...
+                'Visible',         'off', ...
+                'Callback',        @(~,~) obj.on_resume_pressed_());
+
+            % ---- 停止ボタン（一時停止中のみ表示） ----
+            obj.btn_stop_ = uicontrol(obj.fig_, ...
+                'Style',           'pushbutton', ...
+                'String',          '停  止', ...
+                'Units',           'normalized', ...
+                'Position',        [0.876, 0.895, 0.094, 0.065], ...
+                'FontSize',        10, ...
+                'FontWeight',      'bold', ...
+                'BackgroundColor', [0.75, 0.10, 0.10], ...
+                'ForegroundColor', [1.00, 1.00, 1.00], ...
+                'Visible',         'off', ...
+                'Callback',        @(~,~) obj.on_stop_pressed_());
 
             % ---- ヘッダ ----
             obj.ax_hdr_ = axes('Parent', obj.fig_, ...
@@ -378,19 +419,32 @@ classdef WindyMonitor < handle
         end
 
         % ============================================================
-        %  一時停止ボタン コールバック
+        %  ボタンコールバック
         % ============================================================
-        function toggle_pause_(obj, src)
-            obj.paused_ = logical(src.Value);
-            if obj.paused_
-                src.String          = '再  開';
-                src.BackgroundColor = [0.85, 0.20, 0.20];
-                src.ForegroundColor = [1.00, 1.00, 1.00];
-            else
-                src.String          = '一時停止';
-                src.BackgroundColor = [0.95, 0.75, 0.20];
-                src.ForegroundColor = [0.00, 0.00, 0.00];
-            end
+        function on_pause_pressed_(obj)
+            obj.paused_                  = true;
+            obj.pause_action_            = '';
+            obj.btn_pause_.Visible       = 'off';
+            obj.btn_resume_.Visible      = 'on';
+            obj.btn_stop_.Visible        = 'on';
+            drawnow
+        end
+
+        function on_resume_pressed_(obj)
+            obj.pause_action_            = 'resume';
+            obj.paused_                  = false;
+            obj.btn_resume_.Visible      = 'off';
+            obj.btn_stop_.Visible        = 'off';
+            obj.btn_pause_.Visible       = 'on';
+            drawnow
+        end
+
+        function on_stop_pressed_(obj)
+            obj.pause_action_            = 'stop';
+            obj.paused_                  = false;
+            obj.btn_resume_.Visible      = 'off';
+            obj.btn_stop_.Visible        = 'off';
+            obj.btn_pause_.Visible       = 'on';
             drawnow
         end
 
