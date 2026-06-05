@@ -32,6 +32,10 @@ from scipy.interpolate import interp1d
 from tqdm import tqdm
 import traceback
 
+# ロータリーステージ設定（QT_ADL1.m の ORIGIN_PULSE / PPD と一致させること）
+ORIGIN_PULSE  = 11025   # 迎角0°に対応する機械座標 [pulse]
+PULSE_PER_DEG = 250     # pulse per degree (ARS-936-HP: 0.004°/pulse)
+
 
 def average():
     dir = os.getcwd()
@@ -217,8 +221,8 @@ def calc():
 
     # 空力中心まわり
     F_adcenter_gf = data.copy()
-    F_adcenter_gf.loc[:, "Fx":"Fz"] = data.loc[:, "Fx":"Fz"] / 9.8 * 1000      # N → gf
-    F_adcenter_gf.loc[:, "Mx":"Mz"] = data.loc[:, "Mx":"Mz"] / 9.8 * 1000 / 10  # Nm → gf10cm
+    F_adcenter_gf.loc[:, "Fx":"Fz"] = data.loc[:, "Fx":"Fz"] / 9.8 * 1000       # N → gf
+    F_adcenter_gf.loc[:, "Mx":"Mz"] = data.loc[:, "Mx":"Mz"] / 9.8 * 1000 * 10  # Nm → gf10cm
     calbmatrix = np.matrix([
         [1, 0, 0, 0, 0, 0],
         [0, 0, 1, 0, 0, 0],
@@ -287,7 +291,7 @@ def plot_C_raw():
     ax.grid(True)
     ax.plot(C_aero.loc[:, "AoA"], C_aero.loc[:, "Cl"],
             color="royalblue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_l$", fontsize=textsize)
     fig.savefig("Cl_raw.png", bbox_inches="tight")
@@ -298,7 +302,7 @@ def plot_C_raw():
     ax.grid(True)
     ax.plot(C_aero.loc[:, "AoA"], C_aero.loc[:, "Cd"],
             color="royalblue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_d$", fontsize=textsize)
     fig.savefig("Cd_raw.png", bbox_inches="tight")
@@ -309,7 +313,7 @@ def plot_C_raw():
     ax.grid(True)
     ax.plot(C_aero.loc[:, "AoA"], C_aero.loc[:, "Cm"],
             color="royalblue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_m$", fontsize=textsize)
     fig.savefig("Cm_raw.png", bbox_inches="tight")
@@ -353,7 +357,7 @@ def plot_C_aero():
     ax.plot(x, 2 * np.pi * np.pi / 180 * x,
             color="gray", label=r"$C_{l_{\alpha}}=2\pi$",
             linestyle="--", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_ylim(-1.0, 1.0)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_l$", fontsize=textsize)
@@ -366,7 +370,7 @@ def plot_C_aero():
     ax.grid(True)
     ax.plot(data.loc[:, "AoA_mod"], data.loc[:, "Cd"],
             color="blue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_ylim(0, 0.3)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_d$", fontsize=textsize)
@@ -378,7 +382,7 @@ def plot_C_aero():
     ax.grid(True)
     ax.plot(data.loc[:, "AoA_mod"], data.loc[:, "Cm"],
             color="blue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_ylim(-0.2, 0.2)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_m$", fontsize=textsize)
@@ -404,18 +408,24 @@ def plot_PM():
     lw = 3
     mk = 8
 
+    # data = [Mdata_reversed, Pdata] で両者は同数。先半分が負迎角、後半分が正迎角。
+    n = len(data) // 2   # = max_angle + 1
+    max_aoa = n - 1
+    pos = data.loc[n:].reset_index(drop=True)   # 正迎角 (AoA 0 〜 max)
+    neg = data.loc[:n - 1].reset_index(drop=True)  # 負迎角 (AoA -max 〜 0, 反転済み)
+
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.tick_params(labelsize=textsize)
     ax.grid(True)
-    ax.plot(data.loc[21:, "AoA_mod"], data.loc[21:, "Cl"],
+    ax.plot(pos.loc[:, "AoA_mod"], pos.loc[:, "Cl"],
             color="red", marker="^", linewidth=lw, markersize=mk, label="Positive")
-    ax.plot(-data.loc[:20, "AoA_mod"], -data.loc[:20, "Cl"],
+    ax.plot(-neg.loc[:, "AoA_mod"], -neg.loc[:, "Cl"],
             color="blue", marker="^", linewidth=lw, markersize=mk, label="Negative")
-    x = np.arange(-30, 30)
+    x = np.arange(0, max_aoa + 1)
     ax.plot(x, 2 * np.pi * np.pi / 180 * x,
             color="gray", label=r"$C_{l_{\alpha}}=2\pi$",
             linestyle="--", linewidth=lw, markersize=mk)
-    ax.set_xlim(0, 20)
+    ax.set_xlim(0, max_aoa)
     ax.set_ylim(0, 1.0)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_l$", fontsize=textsize)
@@ -426,11 +436,11 @@ def plot_PM():
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.tick_params(labelsize=textsize)
     ax.grid(True)
-    ax.plot(data.loc[21:, "AoA_mod"], data.loc[21:, "Cd"],
+    ax.plot(pos.loc[:, "AoA_mod"], pos.loc[:, "Cd"],
             color="red", marker="^", linewidth=lw, markersize=mk, label="Positive")
-    ax.plot(-data.loc[:20, "AoA_mod"], data.loc[:20, "Cd"],
+    ax.plot(-neg.loc[:, "AoA_mod"], neg.loc[:, "Cd"],
             color="blue", marker="^", linewidth=lw, markersize=mk, label="Negative")
-    ax.set_xlim(0, 20)
+    ax.set_xlim(0, max_aoa)
     ax.set_ylim(0, 0.3)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_d$", fontsize=textsize)
@@ -441,17 +451,57 @@ def plot_PM():
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.tick_params(labelsize=textsize)
     ax.grid(True)
-    ax.plot(data.loc[21:, "AoA_mod"], data.loc[21:, "Cm"],
+    ax.plot(pos.loc[:, "AoA_mod"], pos.loc[:, "Cm"],
             color="red", marker="^", linewidth=lw, markersize=mk, label="Positive")
-    ax.plot(-data.loc[:20, "AoA_mod"], -data.loc[:20, "Cm"],
+    ax.plot(-neg.loc[:, "AoA_mod"], -neg.loc[:, "Cm"],
             color="blue", marker="^", linewidth=lw, markersize=mk, label="Negative")
-    ax.set_xlim(0, 20)
+    ax.set_xlim(0, max_aoa)
     ax.set_ylim(-0.2, 0.2)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_m$", fontsize=textsize)
     ax.legend(fontsize=20)
     fig.savefig("Cm_PM.png", bbox_inches="tight")
     plt.close()
+
+
+def report_zero_lift():
+    """C_aero_raw の線形域から α₀（ゼロ揚力角）を推定し、
+    次回実験に向けた ORIGIN_PULSE 推奨値をターミナルに出力する。
+
+    推定範囲: AoA = -5° 〜 +10°（失速前の線形域）
+    推奨値  : ORIGIN_PULSE_next = ORIGIN_PULSE - round(α₀ × PULSE_PER_DEG)
+    """
+    data = pd.read_csv("C_aero_raw.csv")
+
+    mask = (data["AoA"] >= -5) & (data["AoA"] <= 10)
+    sub  = data[mask].dropna(subset=["AoA", "Cl"])
+
+    if len(sub) < 4:
+        print("[report_zero_lift] 線形域のデータ点が不足しています。スキップします。")
+        return
+
+    p      = np.polyfit(sub["AoA"], sub["Cl"], 1)   # p[0]=slope, p[1]=intercept
+    alpha0 = -p[1] / p[0]                            # Cl=0 となる AoA [度]
+    Cl_at0 = float(np.polyval(p, 0))
+
+    correction = round(alpha0 * PULSE_PER_DEG)
+    suggested  = ORIGIN_PULSE - correction
+
+    sep = "=" * 56
+    print(sep)
+    print("  ゼロ揚力角 (α₀) 推定レポート")
+    print(sep)
+    print(f"  回帰範囲          : AoA = {sub['AoA'].min():.0f}° 〜 {sub['AoA'].max():.0f}°")
+    print(f"  Cl スロープ       : {p[0]:.4f} /°  ({p[0]*180/math.pi:.4f} /rad)")
+    print(f"  α₀                : {alpha0:+.3f}°   [Cl(0°) = {Cl_at0:+.4f}]")
+    print(sep)
+    print(f"  ※ ORIGIN_PULSE (コード定数) = {ORIGIN_PULSE} pulse")
+    print(f"    ↑ QT_ADL1.m の ORIGIN_PULSE と必ず一致させること")
+    print(f"  補正量            : {correction:+d} pulse  ({alpha0:+.3f}°)")
+    print(f"  次回推奨 ORIGIN   : {suggested} pulse")
+    print(f"  → QT_ADL1.m と calc_force.py 冒頭の ORIGIN_PULSE を")
+    print(f"    {suggested} に更新してから次の実験を行ってください。")
+    print(sep)
 
 
 average()
@@ -461,3 +511,4 @@ plot_C_raw()
 calb()
 plot_C_aero()
 plot_PM()
+report_zero_lift()

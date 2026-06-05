@@ -11,8 +11,8 @@ classdef QT_ADL1 < handle
 %   delete(stage);                    % 切断
 %
 % 座標系:
-%   迎角0° = 11250 pulse (機械原点から11250 pulse の位置)
-%   迎角θ° = 11250 - θ×250 pulse  (角度増加 → パルス減少 / CCW方向)
+%   迎角0° = 11025 pulse (機械原点から11025 pulse の位置)
+%   迎角θ° = 11025 - θ×250 pulse  (角度増加 → パルス減少 / CCW方向)
 %
 % 通信仕様 (工場出荷時デフォルト):
 %   ボーレート : 9600 bps
@@ -31,7 +31,7 @@ classdef QT_ADL1 < handle
         BAUD_RATE     = 9600;
         TIMEOUT_S     = 30;     % 移動完了待ちタイムアウト [秒]
         POLL_INTERVAL = 0.05;   % ステータスポーリング間隔 [秒]
-        ORIGIN_PULSE  = 11250;  % 迎角0°に対応する機械座標 [pulse]
+        ORIGIN_PULSE  = 11025;  % 迎角0°に対応する機械座標 [pulse]
         PPD           = 250;    % pulse per degree (ARS-936-HP: 0.004°/pulse)
     end
 
