@@ -204,6 +204,16 @@ classdef WindyMonitor < handle
         end
 
         % ============================================================
+        %  停止が要求されたか（一時停止の有無に関わらず判定）
+        % ============================================================
+        function ok = isStopRequested(obj)
+            % 停止ボタンは paused_ を false に戻すため、isPaused だけでは
+            % 計測中に押された停止を取りこぼす。pause_action_ を直接見る。
+            if ~obj.is_open_(), ok = false; return; end
+            ok = strcmp(obj.pause_action_, 'stop');
+        end
+
+        % ============================================================
         %  フェーズ名更新
         % ============================================================
         function setPhase(obj, phase)

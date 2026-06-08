@@ -126,10 +126,20 @@ while ph_idx <= n_phases
                 pause(0.2);
                 drawnow;
             end
-            if strcmp(monitor.getPauseAction(), 'stop')
-                error('windy:manual_stop', '手動停止が選択されました');
+            if ~monitor.isStopRequested()
+                fprintf('[再開] 計測を再開します。\n\n');
             end
-            fprintf('[再開] 計測を再開します。\n\n');
+        end
+
+        % ------ 停止チェック（一時停止を経由しなくても確実に検出）------
+        %  停止ボタンは paused_ を false に戻すため、上の isPaused ゲートだけ
+        %  では計測中に押された停止を取りこぼす。pause_action_ を直接見て判定し、
+        %  デバイスを後始末してから終了する（ポート開きっぱなしを防ぐ）。
+        if monitor.isStopRequested()
+            fprintf('[停止] 手動停止が選択されました。実験を終了します。\n\n');
+            try; stage.moveToAngle(0); catch; end
+            cleanup_devices_(stage, logger, s_volt, monitor);
+            return;
         end
 
         try
@@ -172,6 +182,9 @@ while ph_idx <= n_phases
             voltages = zeros(1, 500);
             nv = 0;
             while ~logger.isDone()
+                if monitor.isStopRequested()
+                    break;   % 計測を中断 → ループ後の停止チェックで終了処理へ
+                end
                 try
                     writeline(s_volt, 'MD?');
                     raw  = readline(s_volt);
@@ -197,6 +210,15 @@ while ph_idx <= n_phases
             s_volt.Timeout = cfg.r6441b_timeout_sec;   % タイムアウトを元の値に戻す
             voltages = voltages(1:nv);
             fprintf('\n');
+
+            % ------ 計測中に停止が押された場合：この点は保存せず終了 ------
+            if monitor.isStopRequested()
+                fprintf('[停止] 計測を中断しました。実験を終了します。\n\n');
+                try; logger.stop();          catch; end
+                try; stage.moveToAngle(0);   catch; end
+                cleanup_devices_(stage, logger, s_volt, monitor);
+                return;
+            end
 
             % ------ f. 6軸センサの完全終了を待つ ------
             logger.waitForFinish();
