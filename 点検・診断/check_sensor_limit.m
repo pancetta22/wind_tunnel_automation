@@ -21,12 +21,12 @@ LABELS   = {'Fx','Fy','Fz','Mx','My','Mz'};
 UNITS    = {'N','N','N','Nm','Nm','Nm'};
 
 %% ---- 設定読み込み ----
-config_path = fullfile(fileparts(mfilename('fullpath')), 'config.json');
+config_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'config.json');
 if ~isfile(config_path)
     error('config.json が見つかりません。');
 end
 cfg    = jsondecode(fileread(config_path));
-SCRIPT = fullfile(fileparts(mfilename('fullpath')), 'leptrino', 'leptrino_server.py');
+SCRIPT = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'leptrino', 'leptrino_server.py');
 
 %% ---- limit モードでセンサから取得 ----
 fprintf('センサから定格値(Limit)を取得中...\n');

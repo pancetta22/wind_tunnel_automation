@@ -20,6 +20,8 @@
 %    （= タレを入れても Cl,Cd 等の結果は変わりません）。
 
 clc;
+% get_sensor_data() は「計測制御」フォルダにあるためパスを通す。
+addpath(fullfile(fileparts(fileparts(mfilename('fullpath'))), '計測制御'));
 fprintf('=== ゼロ点基準 6軸力測定 (データロガー風) ===\n\n');
 
 % ---- ゼロ点取得 ----

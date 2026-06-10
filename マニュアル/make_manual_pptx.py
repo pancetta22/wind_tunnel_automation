@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Windy 操作マニュアル PowerPoint 生成スクリプト"""
 
+import os
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -733,6 +734,6 @@ add_text(slide, "Windy 風洞実験自動計測システム  —  操作マニ�
 # ============================================================
 #  保存
 # ============================================================
-out_path = "/Users/yuyaokamoto/Documents/GitHub/wind_tunnel_automation/Windy_操作マニュアル.pptx"
+out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Windy_操作マニュアル.pptx")
 prs.save(out_path)
 print(f"保存完了: {out_path}")

@@ -1,5 +1,5 @@
 function data = get_sensor_data()
-    config_path = fullfile(fileparts(mfilename('fullpath')), 'config.json');
+    config_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'config.json');
 
     if ~isfile(config_path)
         error(['config.json が見つかりません。\n' ...
@@ -11,7 +11,7 @@ function data = get_sensor_data()
     PYTHON_EXE = cfg.python_exe;
     PORT       = cfg.leptrino_port;
 
-    SCRIPT = fullfile(fileparts(mfilename('fullpath')), 'leptrino', 'leptrino_server.py');
+    SCRIPT = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'leptrino', 'leptrino_server.py');
 
     cmd = sprintf('"%s" "%s" --port %d', PYTHON_EXE, SCRIPT, PORT);
     [status, output] = system(cmd);

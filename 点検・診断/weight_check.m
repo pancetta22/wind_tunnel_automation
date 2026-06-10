@@ -17,14 +17,14 @@ clc;
 MEASURE_SEC  = 3;      % 1回の計測時間 [秒]（長いほど安定）
 SIZE_KB      = MEASURE_SEC * 60;  % ≒ 1200 sps × 7col × ~17B/row
 
-config_path = fullfile(fileparts(mfilename('fullpath')), 'config.json');
+config_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'config.json');
 if ~isfile(config_path)
     error('config.json が見つかりません。');
 end
 cfg        = jsondecode(fileread(config_path));
 PYTHON_EXE = cfg.python_exe;
 LEPTRINO_PORT = cfg.leptrino_port;
-SCRIPT     = fullfile(fileparts(mfilename('fullpath')), 'leptrino', 'leptrino_server.py');
+SCRIPT     = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'leptrino', 'leptrino_server.py');
 
 %% ---- おもり質量の入力 ----
 mass_g = input('おもりの質量 [g] を入力してください: ');

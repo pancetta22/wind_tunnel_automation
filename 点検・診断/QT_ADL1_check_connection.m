@@ -26,7 +26,7 @@ end
 fprintf('\n');
 
 %% ---- 設定----
-config_path = fullfile(fileparts(mfilename('fullpath')), 'config.json');
+config_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'config.json');
 if ~isfile(config_path)
     error(['config.json が見つかりません。\n' ...
            'config.json.example をコピーして config.json を作成し、\n' ...

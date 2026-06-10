@@ -15,6 +15,10 @@
 % =====================================================================
 %  0. 設定読み込み
 % =====================================================================
+% 計測制御ヘルパ（QT_ADL1 / LeptrinoLogger / WindyMonitor / make_filename 等）を
+% サブフォルダ「計測制御」へ移動したため、パスを通す。
+addpath(fullfile(fileparts(mfilename('fullpath')), '計測制御'));
+
 cfg = load_config_(fileparts(mfilename('fullpath')));
 
 fprintf('\n========================================\n');

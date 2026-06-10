@@ -1,5 +1,5 @@
 %% Advantest R6441B voltage capture
-base_dir = fileparts(mfilename('fullpath'));
+base_dir = fileparts(fileparts(mfilename('fullpath')));
 config_path = fullfile(base_dir, 'config.json');
 
 if ~isfile(config_path)
