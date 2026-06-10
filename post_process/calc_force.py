@@ -26,6 +26,7 @@
 import os
 import re
 import json
+import glob
 import pandas as pd
 import numpy as np
 import math
@@ -44,13 +45,26 @@ def angle_from_name(name, sign):
     return sign * int(m.group(1)) if m else 0
 
 # ロータリーステージ設定
-#   origin_pulse は config.json（リポジトリルート）を唯一の正とする。
-#   → QT_ADL1.m も同じ config.json の origin_pulse を読むため、二重定義の不一致が起きない。
+#   origin_pulse は「その実験を計測した時の値」を使うのが正しい
+#   （α₀ は計測時の原点を基準に測られているため）。
+#   優先1: 実験フォルダの experiment_log.json（run_experiment が計測時に記録）
+#   優先2: リポジトリルートの config.json（現在の設定。古いログにはキーが無い）
+#   優先3: 既定値 11025
 PULSE_PER_DEG = 250     # pulse per degree (ARS-936-HP: 0.004°/pulse)
 
 
 def _load_origin_pulse(default=11025):
-    """リポジトリルートの config.json から origin_pulse を読む（無ければ既定値）。"""
+    """origin_pulse を experiment_log → config.json → 既定値 の順で決める。
+    カレントディレクトリ＝実験フォルダで実行される前提（run_postprocess が cd する）。"""
+    logs = sorted(glob.glob("*_experiment_log.json"))
+    for lp in reversed(logs):                      # 複数あれば新しい日付を優先
+        try:
+            with open(lp, encoding="utf-8") as f:
+                v = json.load(f).get("origin_pulse")
+            if v is not None:
+                return int(v)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            pass
     repo_root   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(repo_root, "config.json")
     try:
@@ -60,7 +74,7 @@ def _load_origin_pulse(default=11025):
         return default
 
 
-ORIGIN_PULSE = _load_origin_pulse()   # 迎角0°に対応する機械座標 [pulse]
+ORIGIN_PULSE = _load_origin_pulse()   # 迎角0°に対応する機械座標 [pulse]（計測時の値）
 
 
 def average():
@@ -506,6 +520,13 @@ def report_zero_lift():
     推定範囲: AoA = -5° 〜 +10°（失速前の線形域）
     推奨値  : ORIGIN_PULSE_next = ORIGIN_PULSE - round(α₀ × PULSE_PER_DEG)
     """
+    # 前回実行のレポートが残ると、データ不足でスキップした場合に
+    # 古い推奨値が y/n プロンプトに出てしまうため、先に削除しておく。
+    try:
+        os.remove("zero_lift_report.json")
+    except FileNotFoundError:
+        pass
+
     data = pd.read_csv("C_aero_raw.csv")
 
     mask = (data["AoA"] >= -5) & (data["AoA"] <= 10)
@@ -530,7 +551,7 @@ def report_zero_lift():
     print(f"  Cl スロープ       : {p[0]:.4f} /°  ({p[0]*180/math.pi:.4f} /rad)")
     print(f"  α₀                : {alpha0:+.3f}°   [Cl(0°) = {Cl_at0:+.4f}]")
     print(sep)
-    print(f"  現在の原点パルス  : {ORIGIN_PULSE} pulse  (config.json の origin_pulse)")
+    print(f"  計測時の原点パルス: {ORIGIN_PULSE} pulse  (experiment_log → config.json の順で取得)")
     print(f"  補正量            : {correction:+d} pulse  ({alpha0:+.3f}°)")
     print(f"  次回推奨 origin   : {suggested} pulse")
     print(sep)

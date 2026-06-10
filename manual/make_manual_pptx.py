@@ -438,9 +438,10 @@ add_text(slide,
 note_bar(slide, "💡 ポイント",
          ["・origin_pulse は config.json の1か所で管理",
           "  （QT_ADL1.m と calc_force.py が共有）。",
+          "・計測時の原点は experiment_log に記録され、",
+          "  過去実験の再処理でも正しい推奨値になる。",
           "・y を選ぶと次回の実験から新しい原点で計測。",
-          "・n なら現状維持。既に推奨値と一致なら",
-          "  「修正不要」と表示してスキップ。",
+          "・n なら現状維持。既に一致ならスキップ。",
           "・対称翼で α₀≈0 になるのが理想。"],
          Inches(8.5), Inches(3.2), Inches(4.4), Inches(2.4), C_GREEN, C_GREEN_LIGHT)
 

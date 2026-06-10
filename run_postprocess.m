@@ -25,7 +25,7 @@ if nargin < 2
     if ~isfile(config_path)
         error('config.json が見つかりません: %s', config_path);
     end
-    cfg = jsondecode(fileread(config_path));
+    cfg = jsondecode(read_text_utf8_(config_path));
 end
 if ~isfield(cfg, 'python_exe_64'), cfg.python_exe_64 = ''; end
 if ~isfield(cfg, 'python_exe'),    cfg.python_exe    = ''; end
@@ -112,33 +112,49 @@ end
 function prompt_origin_pulse_update_(exp_dir, config_path)
     % calc_force.py が出力した zero_lift_report.json を読み、
     % ゼロ揚力角から求めた推奨原点パルスを提示して、y/n で config.json を更新する。
+    %   ・レポートの current_origin_pulse は「その実験を計測した時の原点」
+    %     （experiment_log.json 由来）。推奨値はゼロ揚力位置の絶対座標なので、
+    %     過去実験の再処理でもそのまま config に適用できる。
     report_path = fullfile(exp_dir, 'zero_lift_report.json');
     if ~isfile(report_path)
         return   % レポートが無ければ何もしない（線形域不足などでスキップされた場合）
     end
     try
-        rep = jsondecode(fileread(report_path));
+        rep = jsondecode(read_text_utf8_(report_path));
     catch
         fprintf('[ゼロ揚力角] zero_lift_report.json を読めませんでした。スキップします。\n\n');
         return
     end
 
-    cur = rep.current_origin_pulse;
-    sug = rep.suggested_origin_pulse;
+    cur = rep.current_origin_pulse;     % 計測時の原点
+    sug = rep.suggested_origin_pulse;   % ゼロ揚力位置（機械絶対座標）
+
+    % 現在の config 設定値（過去実験の再処理では計測時と異なることがある）
+    cfg_origin = cur;
+    try
+        c = jsondecode(read_text_utf8_(config_path));
+        if isfield(c, 'origin_pulse') && ~isempty(c.origin_pulse)
+            cfg_origin = c.origin_pulse;
+        end
+    catch
+    end
 
     fprintf('==== ゼロ揚力角からの原点パルス修正 ====\n');
     fprintf('  推定ゼロ揚力角 α₀ : %+.3f°\n', rep.alpha0_deg);
-    fprintf('  現在の原点パルス  : %d pulse\n', cur);
+    fprintf('  計測時の原点パルス: %d pulse\n', cur);
+    if cfg_origin ~= cur
+        fprintf('  現在の設定(config): %d pulse\n', cfg_origin);
+    end
     fprintf('  推奨の原点パルス  : %d pulse  (補正 %+d pulse)\n', sug, rep.correction_pulse);
 
-    if sug == cur
-        fprintf('  → 既に推奨値と一致しています。修正は不要です。\n\n');
+    if sug == cfg_origin
+        fprintf('  → 既に設定が推奨値と一致しています。修正は不要です。\n\n');
         return
     end
 
     ans_up = strtrim(input('  ゼロ揚力角の設定（origin_pulse）をこの推奨値に修正しますか？ [y/N]: ', 's'));
     if ~any(strcmpi(ans_up, {'y', 'yes'}))
-        fprintf('  → 修正しませんでした（origin_pulse = %d のまま）。\n\n', cur);
+        fprintf('  → 修正しませんでした（origin_pulse = %d のまま）。\n\n', cfg_origin);
         return
     end
 
@@ -152,13 +168,16 @@ end
 
 
 function ok = update_config_value_(config_path, key, value)
-    % config.json の数値キーをテキスト置換で更新する（コメント・整形・キー順を保持）。
-    % キーが無ければ先頭の "{" 直後に追記する。
+    % config.json の数値キーを UTF-8 のままテキスト置換で更新する
+    % （日本語コメント・整形・キー順を保持。キーが無ければ先頭に追記）。
     ok = false;
     if ~isfile(config_path)
         return
     end
-    txt = fileread(config_path);
+    txt = read_text_utf8_(config_path);
+    if isempty(txt)
+        return
+    end
     pat = sprintf('("%s"\\s*:\\s*)(-?\\d+(?:\\.\\d+)?)', key);
     if ~isempty(regexp(txt, pat, 'once'))
         txt = regexprep(txt, pat, sprintf('$1%d', value), 'once');
@@ -166,13 +185,27 @@ function ok = update_config_value_(config_path, key, value)
         % キーが無い場合は最初の { の直後に1行追加
         txt = regexprep(txt, '\{', sprintf('{\n  "%s": %d,', key, value), 'once');
     end
-    fid = fopen(config_path, 'w');
+    fid = fopen(config_path, 'w', 'n', 'UTF-8');
     if fid < 0
         return
     end
-    fwrite(fid, txt);
+    fwrite(fid, txt, 'char');
     fclose(fid);
     ok = true;
+end
+
+
+function txt = read_text_utf8_(path)
+    % UTF-8 を明示してテキストを読む。
+    % fileread は MATLAB の既定エンコーディング依存のため、日本語コメントを含む
+    % config.json を扱う際に文字化け・破損しないようこちらを使う。
+    txt = '';
+    fid = fopen(path, 'r', 'n', 'UTF-8');
+    if fid < 0
+        return
+    end
+    txt = fread(fid, [1, Inf], '*char');
+    fclose(fid);
 end
 
 

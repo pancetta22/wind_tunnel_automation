@@ -104,6 +104,7 @@ if need_met
     met.calib_a        = cfg.calib_a;
     met.calib_b        = cfg.calib_b;
     met.volt_offset_mV = cfg.volt_offset_mV;
+    met.origin_pulse   = cfg.origin_pulse;     % 計測時の原点（後処理の α₀→推奨原点の基準）
     met.git_commit     = git_commit_hash_();   % コード版数（再現性記録用）
 end
 % met（新規入力 or 前回継続）を、現在の実験フォルダのログに保存する
@@ -656,6 +657,10 @@ function save_experiment_log_(filepath, date_str, met)
         'calib_b',        met.calib_b,         ...
         'git_commit',     git_commit_field_(met) ...
     );
+    % 計測時の原点パルス（過去実験の再処理時も正しい推奨原点を計算するため）
+    if isfield(met, 'origin_pulse') && ~isempty(met.origin_pulse)
+        log.origin_pulse = met.origin_pulse;
+    end
 
     fid = fopen(filepath, 'w', 'n', 'UTF-8');
     if fid < 0
