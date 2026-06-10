@@ -81,7 +81,7 @@ Windy/
 ├── config.json                 # 各自の設定（Git管理外）
 ├── README.md / SPEC.md / Windy.prj
 │
-├── 計測制御/                    # run_experiment が使う計測機器ヘルパ
+├── measurement_control/        # run_experiment が使う計測機器ヘルパ
 │   ├── QT_ADL1.m               #   迎角ステージ ドライバクラス
 │   ├── LeptrinoLogger.m        #   Leptrino 6軸センサ 時系列ロガークラス
 │   ├── WindyMonitor.m          #   リアルタイムモニタ表示クラス
@@ -89,14 +89,14 @@ Windy/
 │   ├── get_sensor_data.m       #   Leptrinoセンサ データ取得関数
 │   └── get_voltage.m           #   R6441B デジタルマルチメータ データ取得
 │
-├── 点検・診断/                  # 手動で実行する接続確認・診断ツール
+├── diagnostics/                # 手動で実行する接続確認・診断ツール
 │   ├── QT_ADL1_check_connection.m  # 迎角ステージ 接続確認
 │   ├── check_sensor_limit.m        # 力センサ定格確認
 │   ├── weight_check.m              # 既知荷重による力センサ確認
 │   ├── tare_measure.m              # ゼロ点基準 6軸力測定
 │   └── lumix_check_connection.py   # カメラ接続確認
 │
-├── マニュアル/                  # 操作マニュアルと生成スクリプト
+├── manual/                     # 操作マニュアルと生成スクリプト
 │   ├── Windy_操作マニュアル.pptx
 │   └── make_manual_pptx.py
 │
@@ -104,11 +104,11 @@ Windy/
 │   ├── leptrino_server.py
 │   └── CfsUsb.dll              #   Leptrino USB ドライバ DLL（32bit）
 ├── post_process/               # 後処理（風速・空力係数・グラフ生成）
-└── 考察/                        # 分析・比較パワポ（自動更新）
+└── analysis/                   # 分析・比較パワポ（自動更新）
 ```
 
-> ※ 計測制御・点検・診断のファイルはサブフォルダへ移動しましたが、`run_experiment.m`
-> が起動時に `計測制御` をパスに追加し、各診断ツールも `config.json` / `leptrino/` を
+> ※ measurement_control・diagnostics のファイルはサブフォルダへ移動しましたが、`run_experiment.m`
+> が起動時に `measurement_control` をパスに追加し、各診断ツールも `config.json` / `leptrino/` を
 > リポジトリルート基準で参照するため、**従来どおり関数名・スクリプト名で実行できます**。
 
 ---

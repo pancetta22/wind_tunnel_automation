@@ -16,8 +16,8 @@
 %  0. 設定読み込み
 % =====================================================================
 % 計測制御ヘルパ（QT_ADL1 / LeptrinoLogger / WindyMonitor / make_filename 等）を
-% サブフォルダ「計測制御」へ移動したため、パスを通す。
-addpath(fullfile(fileparts(mfilename('fullpath')), '計測制御'));
+% サブフォルダ measurement_control へ移動したため、パスを通す。
+addpath(fullfile(fileparts(mfilename('fullpath')), 'measurement_control'));
 
 cfg = load_config_(fileparts(mfilename('fullpath')));
 
@@ -950,7 +950,7 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
     if contains(lower(exp_name), 'rigid')
         ans_cmp = input('過去データと比較しますか？ [y/N]: ', 's');
         if any(strcmpi(strtrim(ans_cmp), {'y', 'yes'}))
-            updater = fullfile(script_dir, '考察', 'update_aero_data.py');
+            updater = fullfile(script_dir, 'analysis', 'update_aero_data.py');
             if ~isfile(updater)
                 fprintf('[比較] update_aero_data.py が見つかりません: %s\n\n', updater);
                 return
@@ -958,12 +958,12 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
             % 実験フォルダの親を探索元として、空力データ同期＋パワポ再生成
             % （venv セットアップで python-pptx 含む必要モジュールは導入済み）
             src_parent = fileparts(exp_dir);
-            fprintf('[比較] 過去データと比較し、考察フォルダのパワポを更新します...\n');
+            fprintf('[比較] 過去データと比較し、analysis フォルダのパワポを更新します...\n');
             [stc, outc] = system(sprintf('"%s" "%s" "%s"', ...
                 venv_python, updater, src_parent));
             if ~isempty(strtrim(outc)), fprintf('%s\n', outc); end
             if stc == 0
-                fprintf('[比較完了] 考察フォルダの比較パワポを更新しました。\n\n');
+                fprintf('[比較完了] analysis フォルダの比較パワポを更新しました。\n\n');
             else
                 fprintf('[比較] 失敗しました（終了コード %d）。\n\n', stc);
             end
