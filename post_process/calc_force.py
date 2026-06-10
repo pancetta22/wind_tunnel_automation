@@ -77,6 +77,28 @@ def _load_origin_pulse(default=11025):
 ORIGIN_PULSE = _load_origin_pulse()   # 迎角0°に対応する機械座標 [pulse]（計測時の値）
 
 
+def _check_duplicate_points(folder_list):
+    """同一（フェーズ・角度）のCSVが複数無いか検査する。
+    リトライ残骸などの重複があるとオフセット対応がずれて結果が静かに汚染される
+    （260608 の Cl=NaN の原因）ため、処理前に明示的に止める。"""
+    pt = re.compile(r"_(Pofst|Mofst|Pdata|Mdata)_(\d+\.\d{2})\.csv$")
+    seen = {}
+    for f in folder_list:
+        m = pt.search(f)
+        if m:
+            seen.setdefault((m.group(1), m.group(2)), []).append(f)
+    dups = {k: v for k, v in seen.items() if len(v) > 1}
+    if not dups:
+        return
+    print("[エラー] 同一計測点のCSVが複数あります（中断・リトライの残骸の可能性）:")
+    for (ph, ang), fs in sorted(dups.items()):
+        print(f"  {ph} {ang}:")
+        for f in fs:
+            print(f"    - {f}")
+    print("  → 正しい方（通常は新しいタイムスタンプ）を残して他を削除し、再実行してください。")
+    raise SystemExit(1)
+
+
 def average():
     dir = os.getcwd()
     data_dir = "%s/data" % dir
@@ -90,6 +112,9 @@ def average():
 
     # --- [変更] volt_raw.csv を除外（新システムが data/ に混在させる場合の対策）---
     folder_list = [f for f in folder_list if not f.endswith("_volt_raw.csv")]
+
+    # --- 重複計測点があれば（リトライ残骸など）汚染前に明示エラーで停止 ---
+    _check_duplicate_points(folder_list)
 
     print(folder_list)
 

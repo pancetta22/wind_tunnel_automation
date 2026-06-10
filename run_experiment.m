@@ -29,6 +29,9 @@ fprintf('========================================\n\n');
 % ままになっている。残っている解放ガードをここでクリアして発火させ、
 % 前回分のデバイス接続を解放してから始める（"serialport unable to read" 対策）。
 clear windy_cleanup_guard_
+% さらに、ガード作成前（接続〜原点復帰の途中）で中断された場合はガード自体が
+% 無いため、ポートを掴んだままのデバイス変数も明示的に解放しておく。
+clear stage logger s_volt monitor
 
 % Python 設定の事前確認（leptrino=32bit 必須 / 後処理=64bit 推奨）。
 % 取り違えると接続後・実験完了後に遅れて失敗するため、ここで検出する。
@@ -140,6 +143,11 @@ while ph_idx <= n_phases
     fprintf('========================================\n\n');
 
     % ---- ファイル準備 ----
+    % フェーズ再入場（エラーメニューC・停止メニューからの再開・同フォルダ再実験）で
+    % 古い計測CSVが残っていると、calc_force が同一点を二重に読んで結果が汚染される。
+    % どの経路から入ってもクリーンに始まるよう、このフェーズの既存ファイルを毎回掃除する
+    % （初回は対象が無く何もしない）。
+    delete_phase_data_(data_dir, date_str, phase);
     summary_fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
     summary_path  = fullfile(exp_dir, summary_fname);
     init_volt_summary_(summary_path);
@@ -172,6 +180,12 @@ while ph_idx <= n_phases
     while idx <= n_total
 
         pt = pts(idx);
+
+        % この計測点で作るファイルのパス（エラー時の後始末用に毎回リセット。
+        % ファイル名確定前にエラーが起きた場合、前の点のファイルを誤って
+        % 消さないようにするため）
+        force_path    = '';
+        volt_raw_path = '';
 
         % ------ 一時停止チェック ------
         if monitor.isPaused()
@@ -302,10 +316,14 @@ while ph_idx <= n_phases
             switch action_str
                 case 'retry'
                     fprintf('[再試行] 計測点 %d/%d を再試行します。\n\n', idx, n_total);
+                    try; logger.stop(); catch; end             % ファイルを掴んでいる場合に備え停止
+                    delete_point_files_(force_path, volt_raw_path);   % 失敗点の残骸を削除（重複防止）
                     % idx は変えない
 
                 case 'skip'
                     fprintf('[スキップ] 計測点 %d/%d をスキップします。\n\n', idx, n_total);
+                    try; logger.stop(); catch; end
+                    delete_point_files_(force_path, volt_raw_path);   % 失敗点の残骸を削除
                     idx = idx + 1;
 
                 case 'restart_phase'
@@ -341,8 +359,8 @@ while ph_idx <= n_phases
             ph_idx = ph_idx + 1;
 
         case 'restart'
-            % 部分データを削除してフェーズを最初からやり直す
-            delete_phase_data_(data_dir, date_str, phase);
+            % フェーズを最初からやり直す
+            % （部分データはフェーズ先頭の delete_phase_data_ で自動削除される）
             % ph_idx は変えない
 
         case 'goto'
@@ -949,13 +967,32 @@ function notify_sound_(n_tones)
 end
 
 function delete_phase_data_(data_dir, date_str, phase)
-    % フェーズ再試行前に、そのフェーズの部分データを data/ から削除する
+    % フェーズ開始前に、そのフェーズの既存データを data/ から削除する。
+    % エラー/停止からの再入場・同フォルダ再計測で古いCSVが残っていると
+    % calc_force が同一点を二重に読んで結果が汚染されるため。
     yy_date = date_str(3:end);
     files = dir(fullfile(data_dir, sprintf('%s_*_%s_%s_*', date_str, yy_date, phase)));
     if isempty(files), return; end
-    fprintf('[削除] %s フェーズの部分データ %d ファイルを削除します...\n\n', phase, numel(files));
+    fprintf('[削除] %s フェーズの古いデータ %d ファイルを削除します...\n\n', phase, numel(files));
     for i = 1:numel(files)
         delete(fullfile(files(i).folder, files(i).name));
+    end
+end
+
+function delete_point_files_(varargin)
+    % 失敗した計測点の部分ファイルを削除する（リトライ/スキップ時の重複防止）。
+    % ファイル名確定前にエラーが起きた場合はパスが空文字なので何もしない。
+    for i = 1:nargin
+        p = varargin{i};
+        if ~isempty(p) && isfile(p)
+            try
+                delete(p);
+                [~, n, e] = fileparts(p);
+                fprintf('[削除] 失敗点の部分ファイル: %s%s\n', n, e);
+            catch
+                fprintf('[警告] 部分ファイルを削除できませんでした: %s\n', p);
+            end
+        end
     end
 end
 
