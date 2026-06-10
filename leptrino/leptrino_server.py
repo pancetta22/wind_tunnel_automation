@@ -43,9 +43,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=5, help="COMポート番号")
 parser.add_argument(
     "--mode",
-    choices=["avg", "stream"],
+    choices=["avg", "stream", "limit"],
     default="avg",
-    help="avg: 1秒平均をJSONで返す（既存動作）  stream: 時系列CSVを書き出す",
+    help="avg: 1秒平均をJSONで返す  stream: 時系列CSVを書き出す  limit: 定格値と生データを返す（診断用）",
 )
 parser.add_argument("--output", type=str, default="", help="[stream用] 出力CSVパス")
 parser.add_argument(
@@ -110,6 +110,40 @@ if args.mode == "avg":
     result["limit"] = limit_list
     result["n"] = ok_count
     print(json.dumps(result))
+
+# ========================================================
+#  limit モード: 定格値(Limit)と生データ(±10000スケール)を返す
+#
+#  目的: 「定格適用ミス」の診断。物理量は phys = limit/10000 * raw で
+#  計算されるため、GetSensorLimit が返す定格値(limit)が誤って大きいと
+#  すべての力が比例して過大になる。limit と raw を生で出力し、期待値
+#  （SFS080F300M5R0U6: Fx,Fy,Fz=30N / Mx,My,Mz=5Nm）と照合できるようにする。
+# ========================================================
+elif args.mode == "limit":
+    N = 100
+    sums = [0.0] * 6
+    ok_count = 0
+    for _ in range(N):
+        if dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
+            for i in range(6):
+                sums[i] += Data[i]
+            ok_count += 1
+        time.sleep(0.005)
+
+    dll.SetSerialMode(PORT, False)
+    dll.PortClose(PORT)
+    dll.Finalize()
+
+    labels  = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+    raw_avg = [sums[i] / ok_count if ok_count else float("nan") for i in range(6)]
+    phys    = [limit_list[i] / 10000.0 * raw_avg[i] for i in range(6)]
+    print(json.dumps({
+        "labels":  labels,
+        "limit":   limit_list,   # GetSensorLimit の返り値（定格）
+        "raw_avg": raw_avg,      # 生データ（定格を10000とした割合）
+        "phys":    phys,         # 物理量 = limit/10000 * raw
+        "n":       ok_count,
+    }))
 
 # ========================================================
 #  stream モード: 時系列CSVを書き出し、サイズ上限で終了
