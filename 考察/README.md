@@ -14,7 +14,7 @@ Windy 自動化システムの計測結果に関する**分析・考察の成果
 | `Windy_260608結果.pptx` | 260608 実験結果（過去データへ改善）| `make_608_pptx.py` |
 | `Windy_260610結果.pptx` | 260610 実験結果（新設定が安定）| `make_610_pptx.py` |
 | `Windy_rigid3_解決確認.pptx` | **デジボル接触不良の解決確認（簡潔版）** | `make_rigid3_pptx.py` |
-| `Windy_rigid3_研究室比較.pptx` | **研究室MTGテンプレート形式の全データ比較（解決編）** | `make_rigid_comparison_local.py` |
+| `Windy新システムによる実験結果.pptx` | **研究室MTGテンプレート形式の全データ比較（実験追加で自動更新）** | `make_rigid_comparison_local.py` |
 
 各 `.py` は `python <スクリプト>` で同フォルダに `.pptx` を再生成する。
 
@@ -34,7 +34,7 @@ python update_aero_data.py [実験フォルダの親ディレクトリ]
 ```
 
 - 探索元（既定: `DEFAULT_SOURCES`、引数で上書き可）から **"rigid" を名前に含み C_aero.csv を持つフォルダ**を探し、`aero_data/` へ同期（新規・変更分のみ）
-- 続けて `make_rigid_comparison_local.py` を実行し、`Windy_rigid3_研究室比較.pptx` を再生成
+- 続けて `make_rigid_comparison_local.py` を実行し、`Windy新システムによる実験結果.pptx` を再生成
 - 新しい実験は比較スクリプト側で **自動検出**され、表・全グラフに反映（色/マーカー/日付は自動割当、分類は「新規」）。表の行高は件数に応じて自動調整
 - 既存の登録済みデータ（伊東/岡本/金光/新Sys/修正後）はスタイル・解説をそのまま維持
 
