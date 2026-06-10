@@ -11,6 +11,9 @@
   "angle_settle_sec":            2.0,
   "csv_decimal_places":          null,
 
+  "_comment_origin_pulse":       "迎角0°に対応する機械座標[pulse]。実験後にゼロ揚力角から推奨値が提示され、y/nで自動更新できる",
+  "origin_pulse":                11025,
+
   "_comment_windspeed":          "以下は差圧センサ→風速の変換に使用する校正定数（センサ交換・再校正時のみ変更）",
   "_comment_water_density":      "水密度は気温から Kell の式で自動計算されるため不要",
   "volt_offset_mV":              -5.0,

@@ -51,7 +51,7 @@ fprintf('[準備] データフォルダ: %s\n\n', data_dir);
 %  1. 機器接続
 % =====================================================================
 fprintf('[接続] 迎角ステージ (%s) に接続中...\n', cfg.qt_adl1_port);
-stage = QT_ADL1(cfg.qt_adl1_port);
+stage = QT_ADL1(cfg.qt_adl1_port, [], cfg.origin_pulse);   % 原点パルスは config.json から
 stage.homeReturn();
 
 fprintf('[接続] Leptrino センサ (ポート %d) を確認中...\n', cfg.leptrino_port);
@@ -452,6 +452,9 @@ function cfg = load_config_(base_dir)
     end
     if ~isfield(cfg, 'csv_decimal_places')
         cfg.csv_decimal_places = [];
+    end
+    if ~isfield(cfg, 'origin_pulse') || isempty(cfg.origin_pulse)
+        cfg.origin_pulse = 11025;   % 迎角0°の機械座標 [pulse]（QT_ADL1 の既定）
     end
     if ~isfield(cfg, 'r6441b_timeout_sec') || isempty(cfg.r6441b_timeout_sec)
         cfg.r6441b_timeout_sec = 5;

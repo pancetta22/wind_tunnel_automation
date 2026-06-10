@@ -1,48 +1,61 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Windy 操作マニュアル PowerPoint 生成スクリプト"""
+"""Windy フォルダ構成ガイド（操作マニュアル）PowerPoint 生成スクリプト
+
+リポジトリ全体のフォルダ・ファイル構成と役割、データの流れを説明する。
+レイアウト崩れを防ぐため、全テキスト枠に「はみ出し時の自動縮小」を適用。
+"""
 
 import os
 from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
+from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
-from pptx.util import Inches, Pt
-import copy
+from pptx.oxml.ns import qn
 
 # ============================================================
 #  カラーパレット
 # ============================================================
 C_DARK_BLUE   = RGBColor(0x1A, 0x37, 0x6C)   # タイトルバー背景
 C_MID_BLUE    = RGBColor(0x2E, 0x6E, 0xB4)   # アクセント
-C_LIGHT_BLUE  = RGBColor(0xD6, 0xE8, 0xF7)   # ユーザー操作BOX背景
-C_GREEN       = RGBColor(0x21, 0x7A, 0x3C)   # ユーザー操作ラベル
-C_GREEN_LIGHT = RGBColor(0xD6, 0xEE, 0xDF)   # ユーザー操作BOX背景
-C_ORANGE      = RGBColor(0xD9, 0x6D, 0x00)   # 注意
-C_ORANGE_LIGHT= RGBColor(0xFD, 0xF0, 0xDE)   # 注意BOX背景
-C_GRAY_BG     = RGBColor(0xF4, 0xF6, 0xF9)   # スライド背景
-C_PROG_BG     = RGBColor(0xE8, 0xF0, 0xFB)   # プログラム操作BOX背景
-C_PROG_LABEL  = RGBColor(0x2E, 0x6E, 0xB4)   # プログラム操作ラベル
-C_TEXT        = RGBColor(0x1A, 0x1A, 0x2E)   # 本文
+C_GREEN       = RGBColor(0x21, 0x7A, 0x3C)
+C_GREEN_LIGHT = RGBColor(0xD6, 0xEE, 0xDF)
+C_ORANGE      = RGBColor(0xD9, 0x6D, 0x00)
+C_ORANGE_LIGHT= RGBColor(0xFD, 0xF0, 0xDE)
+C_GRAY_BG     = RGBColor(0xF4, 0xF6, 0xF9)
+C_PROG_BG     = RGBColor(0xE8, 0xF0, 0xFB)
+C_TEXT        = RGBColor(0x1A, 0x1A, 0x2E)
 C_WHITE       = RGBColor(0xFF, 0xFF, 0xFF)
-C_BORDER_G    = RGBColor(0x21, 0x7A, 0x3C)
-C_BORDER_B    = RGBColor(0x2E, 0x6E, 0xB4)
-C_RED_LIGHT   = RGBColor(0xFD, 0xE8, 0xE8)
-C_RED         = RGBColor(0xC0, 0x39, 0x2B)
+C_ROW_ALT     = RGBColor(0xEE, 0xF3, 0xFA)   # ゼブラ行
+C_ROW_BORDER  = RGBColor(0xD2, 0xDC, 0xEA)
+C_PURPLE      = RGBColor(0x6A, 0x3D, 0x9A)
+C_TEAL        = RGBColor(0x10, 0x80, 0x80)
+C_GRAYTXT     = RGBColor(0x66, 0x66, 0x66)
 
 prs = Presentation()
 prs.slide_width  = Inches(13.33)
 prs.slide_height = Inches(7.5)
-
-BLANK_LAYOUT = prs.slide_layouts[6]  # 完全ブランク
+SW, SH = prs.slide_width, prs.slide_height
+BLANK = prs.slide_layouts[6]
 
 
 # ============================================================
-#  ヘルパー関数
+#  ヘルパー
 # ============================================================
+def _shrink(tf):
+    """テキストが枠を超えたら自動縮小（レイアウト崩れ防止）。"""
+    bodyPr = tf._txBody.find(qn('a:bodyPr'))
+    if bodyPr is None:
+        return
+    for tag in ('a:normAutofit', 'a:spAutoFit', 'a:noAutofit'):
+        e = bodyPr.find(qn(tag))
+        if e is not None:
+            bodyPr.remove(e)
+    bodyPr.append(bodyPr.makeelement(qn('a:normAutofit'), {}))
+
 
 def add_rect(slide, l, t, w, h, fill=None, border=None, border_w=Pt(1)):
-    shape = slide.shapes.add_shape(1, l, t, w, h)  # MSO_SHAPE_TYPE.RECTANGLE
+    shape = slide.shapes.add_shape(1, l, t, w, h)
     shape.line.fill.background()
     if fill:
         shape.fill.solid()
@@ -54,681 +67,431 @@ def add_rect(slide, l, t, w, h, fill=None, border=None, border_w=Pt(1)):
         shape.line.width = border_w
     else:
         shape.line.fill.background()
+    shape.shadow.inherit = False
     return shape
+
 
 def add_text(slide, text, l, t, w, h,
              font_size=Pt(14), bold=False, color=C_TEXT,
-             align=PP_ALIGN.LEFT, italic=False, wrap=True):
+             align=PP_ALIGN.LEFT, italic=False, wrap=True, anchor=None):
     tb = slide.shapes.add_textbox(l, t, w, h)
     tf = tb.text_frame
     tf.word_wrap = wrap
-    p  = tf.paragraphs[0]
-    p.alignment = align
-    run = p.add_run()
-    run.text = text
-    run.font.size  = font_size
-    run.font.bold  = bold
-    run.font.color.rgb = color
-    run.font.italic = italic
+    tf.margin_left = Pt(2); tf.margin_right = Pt(2)
+    tf.margin_top = Pt(1);  tf.margin_bottom = Pt(1)
+    if anchor is not None:
+        tf.vertical_anchor = anchor
+    lines = text.split('\n')
+    for i, ln in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = align
+        run = p.add_run()
+        run.text = ln
+        run.font.size = font_size
+        run.font.bold = bold
+        run.font.color.rgb = color
+        run.font.italic = italic
+    _shrink(tf)
     return tb
 
-def add_label_box(slide, label, label_color, box_color, border_color,
-                  content_lines, l, t, w, h,
-                  label_size=Pt(11), content_size=Pt(13)):
-    """ラベル付きカラーBOX"""
-    add_rect(slide, l, t, w, h, fill=box_color, border=border_color, border_w=Pt(1.5))
-    # ラベル
-    add_text(slide, label, l + Inches(0.1), t + Inches(0.05),
-             w - Inches(0.2), Inches(0.28),
-             font_size=label_size, bold=True, color=label_color)
-    # 本文
-    tb = slide.shapes.add_textbox(l + Inches(0.15), t + Inches(0.32),
-                                  w - Inches(0.3), h - Inches(0.4))
-    tf = tb.text_frame
-    tf.word_wrap = True
-    first = True
-    for line in content_lines:
-        if first:
-            p = tf.paragraphs[0]
-            first = False
-        else:
-            p = tf.add_paragraph()
-        p.space_before = Pt(2)
-        run = p.add_run()
-        run.text = line
-        run.font.size  = content_size
-        run.font.color.rgb = C_TEXT
 
 def slide_header(slide, title, subtitle=None):
-    """共通ヘッダーバー"""
-    add_rect(slide, 0, 0, prs.slide_width, Inches(0.85), fill=C_DARK_BLUE)
-    add_text(slide, title,
-             Inches(0.3), Inches(0.06), Inches(11), Inches(0.6),
-             font_size=Pt(24), bold=True, color=C_WHITE)
+    add_rect(slide, 0, Inches(0.85), SW, SH - Inches(0.85), fill=C_GRAY_BG)
+    add_rect(slide, 0, 0, SW, Inches(0.85), fill=C_DARK_BLUE)
+    add_rect(slide, 0, Inches(0.85), SW, Inches(0.06), fill=C_MID_BLUE)
+    add_text(slide, title, Inches(0.35), Inches(0.08), Inches(10.5), Inches(0.5),
+             font_size=Pt(23), bold=True, color=C_WHITE)
     if subtitle:
-        add_text(slide, subtitle,
-                 Inches(0.3), Inches(0.55), Inches(11), Inches(0.35),
+        add_text(slide, subtitle, Inches(0.37), Inches(0.55), Inches(11), Inches(0.3),
                  font_size=Pt(12), color=RGBColor(0xA8, 0xC8, 0xF0))
-    # ページ背景
-    add_rect(slide, 0, Inches(0.85), prs.slide_width,
-             prs.slide_height - Inches(0.85), fill=C_GRAY_BG)
 
-def user_badge(slide, l, t):
-    add_rect(slide, l, t, Inches(1.5), Inches(0.32),
-             fill=C_GREEN, border=None)
-    add_text(slide, "👤 ユーザー操作", l + Inches(0.05), t + Inches(0.02),
-             Inches(1.4), Inches(0.28), font_size=Pt(10), bold=True, color=C_WHITE)
 
-def prog_badge(slide, l, t):
-    add_rect(slide, l, t, Inches(1.7), Inches(0.32),
-             fill=C_MID_BLUE, border=None)
-    add_text(slide, "⚙ プログラム自動実行", l + Inches(0.05), t + Inches(0.02),
-             Inches(1.6), Inches(0.28), font_size=Pt(10), bold=True, color=C_WHITE)
+def tag_box(slide, text, l, t, color, w=Inches(2.3)):
+    add_rect(slide, l, t, w, Inches(0.34), fill=color)
+    add_text(slide, text, l, t + Inches(0.02), w, Inches(0.30),
+             font_size=Pt(11), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
+
+
+def file_table(slide, rows, l, t, w, name_w, name_color,
+               row_h=Inches(0.6), name_size=Pt(13), desc_size=Pt(12)):
+    """ファイル一覧（filename | 役割）をゼブラ模様の表で描画。"""
+    from pptx.enum.text import MSO_ANCHOR
+    for i, (name, desc) in enumerate(rows):
+        ry = t + i * row_h
+        bg = C_WHITE if i % 2 == 0 else C_ROW_ALT
+        add_rect(slide, l, ry, w, row_h - Inches(0.04),
+                 fill=bg, border=C_ROW_BORDER, border_w=Pt(0.75))
+        add_text(slide, name, l + Inches(0.12), ry, name_w, row_h - Inches(0.04),
+                 font_size=name_size, bold=True, color=name_color,
+                 anchor=MSO_ANCHOR.MIDDLE)
+        add_text(slide, desc, l + name_w + Inches(0.2), ry,
+                 w - name_w - Inches(0.35), row_h - Inches(0.04),
+                 font_size=desc_size, color=C_TEXT, anchor=MSO_ANCHOR.MIDDLE)
+
+
+def note_bar(slide, label, lines, l, t, w, h, color, bg):
+    add_rect(slide, l, t, w, h, fill=bg, border=color, border_w=Pt(1.3))
+    add_rect(slide, l, t, Inches(0.08), h, fill=color)
+    add_text(slide, label, l + Inches(0.18), t + Inches(0.06), w - Inches(0.3), Inches(0.3),
+             font_size=Pt(12), bold=True, color=color)
+    add_text(slide, '\n'.join(lines), l + Inches(0.18), t + Inches(0.36),
+             w - Inches(0.36), h - Inches(0.44),
+             font_size=Pt(11.5), color=C_TEXT)
 
 
 # ============================================================
 #  スライド 1: タイトル
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-# 上半分グラデーション風の背景
-add_rect(slide, 0, 0, prs.slide_width, Inches(4.8), fill=C_DARK_BLUE)
-add_rect(slide, 0, Inches(4.8), prs.slide_width,
-         prs.slide_height - Inches(4.8), fill=C_GRAY_BG)
+slide = prs.slides.add_slide(BLANK)
+add_rect(slide, 0, 0, SW, SH, fill=C_GRAY_BG)
+add_rect(slide, 0, 0, SW, Inches(4.7), fill=C_DARK_BLUE)
+add_rect(slide, 0, Inches(4.7), SW, Inches(0.08), fill=C_MID_BLUE)
 
-# タイトル
-add_text(slide, "Windy 風洞実験\n自動計測システム",
-         Inches(1.0), Inches(1.1), Inches(11.3), Inches(2.5),
-         font_size=Pt(44), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-
-add_text(slide, "操作マニュアル",
-         Inches(1.0), Inches(3.2), Inches(11.3), Inches(0.7),
-         font_size=Pt(22), color=RGBColor(0xA8, 0xC8, 0xF0), align=PP_ALIGN.CENTER)
-
-# サブ情報
-add_rect(slide, Inches(2.5), Inches(4.3), Inches(8.3), Inches(0.5),
-         fill=C_MID_BLUE, border=None)
-add_text(slide, "run_experiment.m  |  MATLAB R2022a 以降",
-         Inches(2.5), Inches(4.3), Inches(8.3), Inches(0.5),
-         font_size=Pt(14), color=C_WHITE, align=PP_ALIGN.CENTER)
-
-# キャッチコピー
-add_text(slide,
-         "迎角ステージ制御・6軸センサ計測・デジボル計測を統合自動化",
-         Inches(1.0), Inches(5.2), Inches(11.3), Inches(0.6),
+add_text(slide, "Windy 風洞実験自動計測システム",
+         Inches(1.0), Inches(1.25), Inches(11.3), Inches(1.0),
+         font_size=Pt(40), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
+add_text(slide, "フォルダ構成ガイド",
+         Inches(1.0), Inches(2.55), Inches(11.3), Inches(0.8),
+         font_size=Pt(26), color=RGBColor(0xA8, 0xC8, 0xF0), align=PP_ALIGN.CENTER)
+add_rect(slide, Inches(3.0), Inches(3.75), Inches(7.33), Inches(0.55), fill=C_MID_BLUE)
+add_text(slide, "どのフォルダに何があるか・データはどう流れるか",
+         Inches(3.0), Inches(3.82), Inches(7.33), Inches(0.42),
+         font_size=Pt(15), color=C_WHITE, align=PP_ALIGN.CENTER)
+add_text(slide, "MATLAB + Python  /  迎角ステージ・6軸センサ・差圧デジボルを統合自動化",
+         Inches(1.0), Inches(5.25), Inches(11.3), Inches(0.6),
          font_size=Pt(16), color=C_TEXT, align=PP_ALIGN.CENTER, italic=True)
 
 
 # ============================================================
-#  スライド 2: 全体フロー（概要）
+#  スライド 2: 全体像（リポジトリツリー）
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "全体フロー", "実験開始から結果グラフ出力まで")
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "全体像：リポジトリ構成", "ルート直下は「入口」だけ。中身は役割ごとにフォルダ分け")
 
-# フロー図
-steps = [
-    ("①", "事前準備", "config.json 設定\n機器の接続", C_GREEN_LIGHT, C_GREEN),
-    ("②", "スクリプト起動", "run_experiment を\nMATLABで実行", C_GREEN_LIGHT, C_GREEN),
-    ("③", "実験情報を入力", "フォルダ名・気温気圧\n最大迎角・開始フェーズ", C_GREEN_LIGHT, C_GREEN),
-    ("④", "4フェーズ連続計測", "Pofst→Mofst\n→Pdata→Mdata", C_PROG_BG, C_MID_BLUE),
-    ("⑤", "自動後処理", "windspeed.csv生成\n空力係数グラフ出力", C_PROG_BG, C_MID_BLUE),
+# 左：ツリー
+add_rect(slide, Inches(0.4), Inches(1.15), Inches(7.0), Inches(5.95),
+         fill=C_WHITE, border=C_ROW_BORDER, border_w=Pt(1))
+tree = [
+    ("Windy/",                       C_DARK_BLUE, True,  Pt(14)),
+    ("├ run_experiment.m   ← 実験はこれを実行", C_GREEN, True, Pt(12.5)),
+    ("├ run_postprocess.m  ← 後処理だけ再実行", C_GREEN, True, Pt(12.5)),
+    ("├ setup_paths.m      ← 診断ツール用パス", C_GREEN, True, Pt(12.5)),
+    ("├ config.json(.example)  設定ファイル",   C_TEXT,  False, Pt(12.5)),
+    ("├ README.md / SPEC.md",                  C_TEXT,  False, Pt(12.5)),
+    ("│",                            C_GRAYTXT,  False, Pt(12.5)),
+    ("├ measurement_control/  計測機器の制御", C_MID_BLUE, True, Pt(12.5)),
+    ("├ diagnostics/          点検・診断ツール", C_MID_BLUE, True, Pt(12.5)),
+    ("├ leptrino/             6軸センサ通信",   C_MID_BLUE, True, Pt(12.5)),
+    ("├ post_process/         後処理（Python）", C_MID_BLUE, True, Pt(12.5)),
+    ("├ analysis/             結果の比較・分析", C_MID_BLUE, True, Pt(12.5)),
+    ("└ manual/               このマニュアル",  C_MID_BLUE, True, Pt(12.5)),
 ]
+for i, (txt, col, bd, sz) in enumerate(tree):
+    add_text(slide, txt, Inches(0.65), Inches(1.3) + i * Inches(0.42),
+             Inches(6.6), Inches(0.4), font_size=sz, bold=bd, color=col)
 
-box_w = Inches(2.1)
-box_h = Inches(1.6)
-gap   = Inches(0.22)
-total_w = len(steps) * box_w + (len(steps) - 1) * gap
-start_x = (prs.slide_width - total_w) / 2
-y = Inches(1.55)
-
-for i, (num, title_s, body, bg, fg) in enumerate(steps):
-    x = start_x + i * (box_w + gap)
-    add_rect(slide, x, y, box_w, box_h, fill=bg,
-             border=fg, border_w=Pt(2.0))
-    # 番号円
-    add_rect(slide, x + Inches(0.05), y + Inches(0.05),
-             Inches(0.38), Inches(0.38), fill=fg, border=None)
-    add_text(slide, num, x + Inches(0.05), y + Inches(0.05),
-             Inches(0.38), Inches(0.38),
-             font_size=Pt(11), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-    add_text(slide, title_s,
-             x + Inches(0.1), y + Inches(0.45),
-             box_w - Inches(0.2), Inches(0.45),
-             font_size=Pt(13), bold=True, color=fg, align=PP_ALIGN.CENTER)
-    add_text(slide, body,
-             x + Inches(0.1), y + Inches(0.88),
-             box_w - Inches(0.2), Inches(0.65),
-             font_size=Pt(11), color=C_TEXT, align=PP_ALIGN.CENTER)
-    # 矢印
-    if i < len(steps) - 1:
-        ax = x + box_w + Inches(0.04)
-        add_text(slide, "▶", ax, y + Inches(0.6),
-                 gap - Inches(0.08), Inches(0.4),
-                 font_size=Pt(16), color=C_MID_BLUE, align=PP_ALIGN.CENTER)
-
-# 凡例
-ly = Inches(3.55)
-add_rect(slide, Inches(0.5), ly, Inches(1.55), Inches(0.32),
-         fill=C_GREEN_LIGHT, border=C_GREEN, border_w=Pt(1.5))
-add_text(slide, "  👤 ユーザー操作", Inches(0.5), ly + Inches(0.03),
-         Inches(1.55), Inches(0.28), font_size=Pt(11), color=C_GREEN, bold=True)
-add_rect(slide, Inches(2.3), ly, Inches(1.75), Inches(0.32),
-         fill=C_PROG_BG, border=C_MID_BLUE, border_w=Pt(1.5))
-add_text(slide, "  ⚙ プログラム自動実行", Inches(2.3), ly + Inches(0.03),
-         Inches(1.75), Inches(0.28), font_size=Pt(11), color=C_MID_BLUE, bold=True)
-
-# フェーズ説明
-py = Inches(4.05)
-add_rect(slide, Inches(0.4), py, prs.slide_width - Inches(0.8), Inches(2.8),
-         fill=C_PROG_BG, border=C_MID_BLUE, border_w=Pt(1.5))
-add_text(slide, "⚙ 4フェーズとは",
-         Inches(0.6), py + Inches(0.1), Inches(4), Inches(0.36),
-         font_size=Pt(13), bold=True, color=C_MID_BLUE)
-
-phase_info = [
-    ("Pofst", "正迎角・無風",  "0°→+1°→0°→…→+max°→0°", "ゼロ点補正データ（風なし）"),
-    ("Mofst", "負迎角・無風",  "0°→-1°→0°→…→-max°→0°", "ゼロ点補正データ（風なし）"),
-    ("Pdata", "正迎角・有風",  "0°→+1°→0°→…→+max°→0°", "実験データ（風あり）"),
-    ("Mdata", "負迎角・有風",  "0°→-1°→0°→…→-max°→0°", "実験データ（風あり）"),
+# 右：3グループ要約
+gx = Inches(7.7)
+groups = [
+    ("🟢 ルート直下＝入口", C_GREEN, C_GREEN_LIGHT,
+     ["実験・後処理・設定。普段触るのはここ。",
+      "run_experiment / run_postprocess / config.json"]),
+    ("🔵 計測ロジック", C_MID_BLUE, C_PROG_BG,
+     ["機器制御・センサ通信・点検ツール。",
+      "measurement_control / diagnostics / leptrino"]),
+    ("🟣 後処理・分析", C_PURPLE, RGBColor(0xEE, 0xE7, 0xF6),
+     ["空力係数の算出と過去データとの比較。",
+      "post_process / analysis / manual"]),
 ]
-col_w = (prs.slide_width - Inches(0.9)) / 4
-for i, (ph, sub, seq, note) in enumerate(phase_info):
-    cx = Inches(0.45) + i * col_w
-    add_text(slide, ph,
-             cx + Inches(0.1), py + Inches(0.5),
-             col_w - Inches(0.2), Inches(0.38),
-             font_size=Pt(15), bold=True, color=C_DARK_BLUE, align=PP_ALIGN.CENTER)
-    add_text(slide, sub,
-             cx + Inches(0.1), py + Inches(0.85),
-             col_w - Inches(0.2), Inches(0.3),
-             font_size=Pt(11), color=C_ORANGE, align=PP_ALIGN.CENTER, bold=True)
-    add_text(slide, seq,
-             cx + Inches(0.1), py + Inches(1.15),
-             col_w - Inches(0.2), Inches(0.38),
-             font_size=Pt(10), color=C_TEXT, align=PP_ALIGN.CENTER)
-    add_text(slide, note,
-             cx + Inches(0.1), py + Inches(1.55),
-             col_w - Inches(0.2), Inches(0.38),
-             font_size=Pt(10), color=RGBColor(0x55, 0x55, 0x55),
-             align=PP_ALIGN.CENTER, italic=True)
-    if i < 3:
-        add_text(slide, "│", cx + col_w - Inches(0.12),
-                 py + Inches(0.9), Inches(0.22), Inches(0.7),
-                 font_size=Pt(18), color=RGBColor(0xBB, 0xCC, 0xDD),
-                 align=PP_ALIGN.CENTER)
+gy = Inches(1.25)
+for label, col, bg, lines in groups:
+    note_bar(slide, label, lines, gx, gy, Inches(5.2), Inches(1.75), col, bg)
+    gy += Inches(1.95)
 
 
 # ============================================================
-#  スライド 3: 事前準備（ユーザー）
+#  スライド 3: ルート直下のファイル
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "① 事前準備", "実験前に1回だけ確認する設定")
-user_badge(slide, Inches(10.8), Inches(0.25))
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "ルート直下のファイル", "普段の操作で使う「入口」。MATLAB コマンドウィンドウから実行")
 
-y0 = Inches(1.05)
-
-# LEFT: config.json
-add_label_box(slide, "📄 config.json の設定",
-              C_GREEN, C_GREEN_LIGHT, C_GREEN,
-              [
-                  'output_dir    : データ保存先のルートフォルダ',
-                  '                例) "C:/Users/xxx/WindyData"',
-                  'leptrino_port : Leptrino の COM ポート番号',
-                  'qt_adl1_port  : 迎角ステージの COM ポート',
-                  'r6441b_port   : デジボルの COM ポート',
-                  'python_exe    : 32bit Python（計測用）のパス',
-                  'python_exe_64 : 64bit Python（後処理用）のパス',
-                  '',
-                  'calib_a / calib_b : 較正定数（通常変更不要）',
-              ],
-              Inches(0.4), y0, Inches(5.7), Inches(4.0),
-              content_size=Pt(12))
-
-# RIGHT: 機器接続
-add_label_box(slide, "🔌 機器の接続確認",
-              C_GREEN, C_GREEN_LIGHT, C_GREEN,
-              [
-                  '① Leptrino 6軸センサ',
-                  '    USB-RS232C 変換経由で PC に接続',
-                  '',
-                  '② 迎角ステージ（QT-ADL1）',
-                  '    USB-RS232C 変換経由で PC に接続',
-                  '',
-                  '③ R6441B デジボル（差圧センサ）',
-                  '    RS-232C で PC に接続',
-              ],
-              Inches(6.4), y0, Inches(6.5), Inches(4.0),
-              content_size=Pt(12))
-
-# 注意BOX
-add_label_box(slide, "⚠  注意",
-              C_ORANGE, C_ORANGE_LIGHT, C_ORANGE,
-              [
-                  'config.json の output_dir は "WindyData" のルートフォルダを指定（日付サブフォルダは含めない）',
-                  '実験ごとに自動でサブフォルダが作成されます',
-              ],
-              Inches(0.4), Inches(5.2), Inches(12.5), Inches(0.9),
-              content_size=Pt(12))
-
-
-# ============================================================
-#  スライド 4: スクリプト起動 + 入力ステップ
-# ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "② スクリプト起動 ＆ 実験情報の入力", "MATLAB コマンドウィンドウで操作")
-user_badge(slide, Inches(10.8), Inches(0.25))
-
-# 起動コマンド
-add_rect(slide, Inches(0.4), Inches(1.05), Inches(12.5), Inches(0.8),
-         fill=C_DARK_BLUE, border=None)
-add_text(slide, ">> run_experiment",
-         Inches(0.7), Inches(1.15), Inches(10), Inches(0.55),
-         font_size=Pt(20), bold=True, color=RGBColor(0x7F, 0xD9, 0x7F))
-
-inputs = [
-    ("実験フォルダ名",
-     "実験フォルダ名: ",
-     "260605_rigid",
-     [
-         "WindyData の直下に作成されるフォルダ名",
-         "形式の例: 260605_rigid  /  260605_flex",
-         "使用不可文字:  / \\ : * ? \" < > |",
-     ]),
-    ("気温・気圧",
-     "気温 [℃]: \n気圧 [mmHg]: ",
-     "25.3\n758.0",
-     [
-         "空気密度 ρ が自動計算される",
-         "水密度もKellの式で自動計算",
-         "全フェーズで共通（1回のみ入力）",
-     ]),
-    ("最大迎角",
-     "最大迎角 [度, 1-30]: ",
-     "30 ← Enter のみで 30°",
-     [
-         "1 〜 30 の整数で入力",
-         "入力した角度まで 1°刻みで計測",
-         "1フェーズあたり 2×max+1 点",
-     ]),
-    ("開始フェーズ",
-     "開始フェーズ [1-4]: ",
-     "1 ← Enter のみで Pofst から",
-     [
-         "通常は Enter（=1: Pofst から）",
-         "途中再開時は 2〜4 を選択",
-         "1:Pofst  2:Mofst  3:Pdata  4:Mdata",
-     ]),
+rows = [
+    ("run_experiment.m",  "メイン実験スクリプト。計測〜後処理まで一気通貫（まずこれ）"),
+    ("run_postprocess.m", "後処理だけを単体で再実行  例) run_postprocess('…/260605_rigid')"),
+    ("setup_paths.m",     "診断ツールやヘルパを単体で使う前に1回だけ実行（パスを通す）"),
+    ("config.json",       "各自の環境設定（COMポート・Pythonパス・保存先）※Git管理外"),
+    ("config.json.example","設定の雛形。コピーして config.json を作る"),
+    ("README.md",         "クイックスタート・構成・使い方の説明書"),
+    ("SPEC.md",           "設計仕様書（実装の経緯・歴史的資料）"),
 ]
+file_table(slide, rows, Inches(0.4), Inches(1.25), Inches(12.53), Inches(3.9),
+           C_GREEN, row_h=Inches(0.66))
 
-col_w = Inches(3.05)
-gap_x = Inches(0.08)
-start_x = Inches(0.4)
-y1 = Inches(2.0)
-bh = Inches(3.9)
-
-for i, (label, prompt, response, notes) in enumerate(inputs):
-    x = start_x + i * (col_w + gap_x)
-
-    # 番号
-    add_rect(slide, x, y1, Inches(0.32), Inches(0.32),
-             fill=C_MID_BLUE, border=None)
-    add_text(slide, str(i+1), x, y1, Inches(0.32), Inches(0.32),
-             font_size=Pt(12), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-
-    # ラベル
-    add_text(slide, label, x + Inches(0.36), y1 + Inches(0.04),
-             col_w - Inches(0.36), Inches(0.3),
-             font_size=Pt(13), bold=True, color=C_DARK_BLUE)
-
-    # 端末っぽいBOX
-    add_rect(slide, x, y1 + Inches(0.38), col_w, Inches(1.05),
-             fill=RGBColor(0x1E, 0x1E, 0x1E), border=RGBColor(0x44, 0x44, 0x44))
-    add_text(slide, prompt, x + Inches(0.1), y1 + Inches(0.42),
-             col_w - Inches(0.2), Inches(0.42),
-             font_size=Pt(10), color=RGBColor(0xCC, 0xCC, 0xCC), italic=True)
-    add_text(slide, response, x + Inches(0.1), y1 + Inches(0.82),
-             col_w - Inches(0.2), Inches(0.52),
-             font_size=Pt(10), bold=True, color=RGBColor(0x7F, 0xD9, 0x7F))
-
-    # 説明
-    add_rect(slide, x, y1 + Inches(1.48), col_w, bh - Inches(1.48),
-             fill=C_GREEN_LIGHT, border=C_GREEN, border_w=Pt(1.2))
-    for j, note in enumerate(notes):
-        add_text(slide, "• " + note,
-                 x + Inches(0.1), y1 + Inches(1.55) + j * Inches(0.7),
-                 col_w - Inches(0.2), Inches(0.65),
-                 font_size=Pt(11), color=C_TEXT)
+note_bar(slide, "💡 最短の使い方",
+         ["① config.json.example をコピーして config.json を作り、COMポート等を設定（初回のみ）",
+          "② MATLAB でこのフォルダに cd して  run_experiment  を実行 → あとは画面の指示どおり"],
+         Inches(0.4), Inches(5.95), Inches(12.53), Inches(1.05), C_GREEN, C_GREEN_LIGHT)
 
 
 # ============================================================
-#  スライド 5: プログラムが自動で行うこと（機器接続・フォルダ作成）
+#  スライド 4: measurement_control/
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "入力後にプログラムが自動で行うこと", "機器接続・フォルダ作成")
-prog_badge(slide, Inches(10.6), Inches(0.25))
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "measurement_control/  — 計測機器の制御",
+             "run_experiment が内部で使う MATLAB ヘルパ群")
+tag_box(slide, "⚙ run_experiment が自動で使用", Inches(10.0), Inches(0.25), C_MID_BLUE, Inches(3.0))
 
-y0 = Inches(1.05)
-
-add_label_box(slide, "⚙ 自動処理の流れ",
-              C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
-              [
-                  "1.  迎角ステージ（QT-ADL1）に接続  →  ホームポジションへ自動復帰",
-                  "2.  Leptrino 6軸センサの接続を確認",
-                  "3.  R6441B デジボルに接続",
-                  "4.  WindyMonitor（モニター画面）を起動",
-                  "5.  experiment_log.json を保存（気温・気圧・空気密度など）",
-              ],
-              Inches(0.4), y0, Inches(12.5), Inches(2.5),
-              content_size=Pt(13))
-
-# フォルダ構造
-add_label_box(slide, "📁 自動作成されるフォルダ構造",
-              C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
-              [], Inches(0.4), Inches(3.7), Inches(12.5), Inches(3.55))
-
-folder_lines = [
-    ("WindyData/",                                 0, C_DARK_BLUE,  True,  Pt(14)),
-    ("└── 260605_rigid/",                          1, C_MID_BLUE,   True,  Pt(13)),
-    ("    ├── data/",                              2, C_MID_BLUE,   True,  Pt(13)),
-    ("    │   ├── 20260605_143022_260605_Pofst_01.00.csv   ← 6軸センサCSV",  3, C_TEXT, False, Pt(11)),
-    ("    │   ├── 20260605_143022_260605_Pofst_01.00_volt_raw.csv",           3, C_TEXT, False, Pt(11)),
-    ("    │   └── ...",                            3, C_TEXT,       False, Pt(11)),
-    ("    ├── 20260605_Pofst_volt_summary.csv      ← 差圧電圧サマリー（フェーズ毎）",  2, C_TEXT, False, Pt(11)),
-    ("    ├── 20260605_experiment_log.json          ← 気温・気圧・校正定数",           2, C_TEXT, False, Pt(11)),
-    ("    ├── windspeed.csv                         ← 後処理で自動生成",              2, C_TEXT, False, Pt(11)),
-    ("    └── Cl.png / Cd.png / ...                ← 後処理で自動生成",              2, C_TEXT, False, Pt(11)),
+rows = [
+    ("QT_ADL1.m",        "迎角ステージ（QT-ADL1）のドライバクラス。原点復帰・角度移動"),
+    ("LeptrinoLogger.m", "Leptrino 6軸センサの時系列ロガークラス（バックグラウンド記録）"),
+    ("WindyMonitor.m",   "計測中のリアルタイムモニタ画面（波形・進捗・停止ボタン）"),
+    ("get_sensor_data.m","6軸センサの瞬時平均値を1回取得する関数"),
+    ("get_voltage.m",    "R6441B デジボル（差圧電圧）を取得する関数"),
+    ("make_filename.m",  "計測ファイル名を規則に従って生成するユーティリティ"),
 ]
+file_table(slide, rows, Inches(0.4), Inches(1.3), Inches(12.53), Inches(3.7),
+           C_MID_BLUE, row_h=Inches(0.7))
 
-for j, (txt, indent, col, bd, sz) in enumerate(folder_lines):
-    add_text(slide, txt,
-             Inches(0.7), Inches(3.85) + j * Inches(0.3),
-             Inches(12.1), Inches(0.3),
-             font_size=sz, bold=bd, color=col)
+note_bar(slide, "📌 ポイント",
+         ["run_experiment 実行時に自動でパスが通るので、普段はここを直接触らない。",
+          "個別に使いたいときは先に setup_paths を実行する。"],
+         Inches(0.4), Inches(5.85), Inches(12.53), Inches(1.1), C_MID_BLUE, C_PROG_BG)
 
 
 # ============================================================
-#  スライド 6: 各フェーズ開始時のユーザー操作
+#  スライド 5: diagnostics/
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "各フェーズ開始時のユーザー操作", "フェーズは Pofst→Mofst→Pdata→Mdata の順に自動進行")
-user_badge(slide, Inches(10.8), Inches(0.25))
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "diagnostics/  — 点検・診断ツール",
+             "実験前後に手動で実行して機器やセンサを確認する")
+tag_box(slide, "👤 手動で実行（要 setup_paths）", Inches(9.9), Inches(0.25), C_GREEN, Inches(3.1))
 
-y0 = Inches(1.05)
-
-# 無風フェーズ
-add_label_box(slide, "👤 無風フェーズ（Pofst / Mofst）の確認",
-              C_GREEN, C_GREEN_LIGHT, C_GREEN,
-              [], Inches(0.4), y0, Inches(6.0), Inches(5.65))
-
-ofst_steps = [
-    ("Step 1", "ブロワー停止の確認",
-     "「ブロワーが停止していることを\n確認してください。\nEnter を押してください: 」\n\n→ ブロワー停止を確認して Enter\n\n※ Pofst の直前にのみ、差圧センサの\n   電圧オフセットが自動計測されます\n   （ユーザー操作不要）"),
+rows = [
+    ("QT_ADL1_check_connection.m", "迎角ステージの COM ポート接続・通信を確認"),
+    ("check_sensor_limit.m",       "6軸センサの定格（最大計測レンジ）を確認"),
+    ("weight_check.m",             "既知のおもりを載せて力センサの読みを検証"),
+    ("tare_measure.m",             "ゼロ点を取り、その基準からの6軸力を表示"),
+    ("lumix_check_connection.py",  "カメラ（LUMIX）の接続確認（Python）"),
 ]
-for i, (step, ttl, body) in enumerate(ofst_steps):
-    sy = y0 + Inches(0.42) + i * Inches(2.45)
-    add_rect(slide, Inches(0.55), sy, Inches(0.7), Inches(0.28),
-             fill=C_GREEN, border=None)
-    add_text(slide, step, Inches(0.55), sy, Inches(0.7), Inches(0.28),
-             font_size=Pt(10), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-    add_text(slide, ttl, Inches(1.3), sy, Inches(4.8), Inches(0.28),
-             font_size=Pt(12), bold=True, color=C_DARK_BLUE)
-    add_text(slide, body, Inches(0.6), sy + Inches(0.32),
-             Inches(5.5), Inches(2.0),
-             font_size=Pt(11), color=C_TEXT)
+file_table(slide, rows, Inches(0.4), Inches(1.3), Inches(12.53), Inches(4.5),
+           C_GREEN, row_h=Inches(0.72))
 
-# 有風フェーズ
-add_label_box(slide, "👤 有風フェーズ（Pdata / Mdata）の確認",
-              C_GREEN, C_GREEN_LIGHT, C_GREEN,
-              [], Inches(6.7), y0, Inches(6.2), Inches(5.65))
+note_bar(slide, "👤 使い方",
+         ["MATLAB のルートで  setup_paths  を1回実行 → 各ツールを関数名で実行できる。",
+          "いずれも config.json と leptrino/ をリポジトリルート基準で参照する。"],
+         Inches(0.4), Inches(5.95), Inches(12.53), Inches(1.05), C_GREEN, C_GREEN_LIGHT)
 
-data_steps = [
-    ("Step 1", "ブロワー起動・風速安定待ち",
-     "「ブロワーを起動し、風速が安定した\nことを確認してください。\nEnter を押してください: 」\n\n→ ブロワーを起動\n→ 風速が安定するのを確認\n→ Enter を押す"),
+
+# ============================================================
+#  スライド 6: leptrino/ と post_process/
+# ============================================================
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "leptrino/  と  post_process/",
+             "センサ通信（Python）と、計測後の数値処理（Python）")
+
+# 左: leptrino
+add_rect(slide, Inches(0.4), Inches(1.2), Inches(6.1), Inches(5.8),
+         fill=C_WHITE, border=C_ROW_BORDER, border_w=Pt(1))
+add_text(slide, "leptrino/", Inches(0.6), Inches(1.32), Inches(5.7), Inches(0.4),
+         font_size=Pt(17), bold=True, color=C_TEAL)
+add_text(slide, "6軸センサとの通信（32bit Python 経由）",
+         Inches(0.6), Inches(1.74), Inches(5.7), Inches(0.32),
+         font_size=Pt(12), color=C_GRAYTXT)
+file_table(slide, [
+    ("leptrino_server.py", "センサ計測サーバ。MATLABから呼ばれCSVへ記録"),
+    ("CfsUsb.dll",         "Leptrino USB ドライバ（32bit専用）"),
+], Inches(0.55), Inches(2.2), Inches(5.8), Inches(3.7), C_TEAL,
+   row_h=Inches(1.0), name_size=Pt(12.5))
+note_bar(slide, "⚠ 32bit 必須",
+         ["CfsUsb.dll は 32bit 専用。config.json の",
+          "python_exe には 32bit Python を指定する。"],
+         Inches(0.55), Inches(4.4), Inches(5.8), Inches(1.2), C_ORANGE, C_ORANGE_LIGHT)
+
+# 右: post_process
+add_rect(slide, Inches(6.7), Inches(1.2), Inches(6.23), Inches(5.8),
+         fill=C_WHITE, border=C_ROW_BORDER, border_w=Pt(1))
+add_text(slide, "post_process/", Inches(6.9), Inches(1.32), Inches(5.8), Inches(0.4),
+         font_size=Pt(17), bold=True, color=C_MID_BLUE)
+add_text(slide, "計測データ → 風速・空力係数・グラフ（64bit Python）",
+         Inches(6.9), Inches(1.74), Inches(5.9), Inches(0.32),
+         font_size=Pt(12), color=C_GRAYTXT)
+file_table(slide, [
+    ("make_windspeed.py", "差圧電圧 → 風速 windspeed.csv"),
+    ("calc_force.py",     "6軸力 → 空力係数 C_aero.csv・グラフPNG"),
+    ("requirements.txt",  "必要 Python パッケージ一覧"),
+    ("venv/",             "自動生成される仮想環境（Git管理外）"),
+], Inches(6.85), Inches(2.2), Inches(5.95), Inches(3.7), C_MID_BLUE,
+   row_h=Inches(0.62), name_size=Pt(12.5))
+note_bar(slide, "⚙ 自動実行",
+         ["run_experiment 完了時に venv 構築から自動。",
+          "失敗時は run_postprocess('…') で再実行。"],
+         Inches(6.85), Inches(4.85), Inches(5.95), Inches(1.15), C_MID_BLUE, C_PROG_BG)
+
+
+# ============================================================
+#  スライド 7: analysis/
+# ============================================================
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "analysis/  — 結果の比較・分析",
+             "新システムの結果を過去の剛体翼データと比較（パワポ自動更新）")
+tag_box(slide, "🟣 rigid 実験で自動更新", Inches(10.3), Inches(0.25), C_PURPLE, Inches(2.7))
+
+rows = [
+    ("update_aero_data.py",            "新実験の C_aero.csv を取り込み→比較パワポ再生成（これ1つでOK）"),
+    ("make_rigid_comparison_local.py", "比較パワポを生成する本体スクリプト"),
+    ("Windy新システムによる実験結果.pptx", "比較パワポ（成果物）。実験追加で自動更新される"),
+    ("研究室MTGテンプレート.pptx",      "パワポの雛形（研究室フォーマット）"),
+    ("aero_data/",                     "各実験の空力係数データ C_aero.csv の置き場"),
+    ("archive/",                       "使い終わった単発スクリプト・旧パワポ・グラフ"),
 ]
-for i, (step, ttl, body) in enumerate(data_steps):
-    sy = y0 + Inches(0.42) + i * Inches(2.45)
-    add_rect(slide, Inches(6.85), sy, Inches(0.7), Inches(0.28),
-             fill=C_GREEN, border=None)
-    add_text(slide, step, Inches(6.85), sy, Inches(0.7), Inches(0.28),
-             font_size=Pt(10), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-    add_text(slide, ttl, Inches(7.6), sy, Inches(5.0), Inches(0.28),
-             font_size=Pt(12), bold=True, color=C_DARK_BLUE)
-    add_text(slide, body, Inches(6.9), sy + Inches(0.32),
-             Inches(5.7), Inches(2.0),
-             font_size=Pt(11), color=C_TEXT)
+file_table(slide, rows, Inches(0.4), Inches(1.3), Inches(12.53), Inches(3.95),
+           C_PURPLE, row_h=Inches(0.66))
 
-# 注意
-add_label_box(slide, "⚠  有風フェーズのブロワー操作は 1回だけ（Pdata開始前のみ）",
-              C_ORANGE, C_ORANGE_LIGHT, C_ORANGE,
-              ["Mdata はそのまま風を出し続けた状態で自動継続されます。",
-               "Mdata 終了後のブロワー停止はユーザーが手動で行ってください。"],
-              Inches(0.4), Inches(6.85), Inches(12.5), Inches(0.78),
-              content_size=Pt(11))
+note_bar(slide, "🟣 流れ",
+         ["実験名に rigid を含むと、後処理の最後に「過去データと比較しますか？」→ y で自動更新。",
+          "手動なら  python update_aero_data.py  （引数なしで config.json の output_dir を走査）。"],
+         Inches(0.4), Inches(5.95), Inches(12.53), Inches(1.05), C_PURPLE, RGBColor(0xEE, 0xE7, 0xF6))
 
 
 # ============================================================
-#  スライド 7: 1計測点の自動処理フロー
+#  スライド 8: データの流れ
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "1計測点ごとにプログラムが自動で行うこと",
-             "各迎角で繰り返される処理（例: 0°→+1°→0°→+2°→0°…）")
-prog_badge(slide, Inches(10.6), Inches(0.25))
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "データの流れ", "計測から比較パワポまで、ファイルがどう生まれるか")
 
-steps7 = [
-    ("a", "迎角ステージ移動", "指定角度へステージを自動移動\n位置が確定するまで待機"),
-    ("b", "振動収束待ち",      f"ステージ停止後 {'{angle_settle_sec}'} 秒待機\n（config.json の angle_settle_sec で設定）"),
-    ("c", "6軸センサ計測開始", "leptrino_server.py を\nバックグラウンドで起動\nCSVへのストリーミング記録を開始"),
-    ("d", "デジボル計測ループ", "6軸センサが規定量に達するまで\nR6441Bに繰り返しポーリング\n差圧電圧を収集（~10サンプル/秒）"),
-    ("e", "データ保存",         "6軸センサCSV を確認\n差圧電圧を volt_raw.csv に保存\nvolt_summary.csv に1行追記"),
+flow = [
+    ("run_experiment.m", "MATLAB で実行\n4フェーズを自動計測", C_GREEN_LIGHT, C_GREEN),
+    ("実験フォルダ", "output_dir/<実験名>/\ndata/・volt_summary・log", C_GRAY_BG, C_MID_BLUE),
+    ("post_process", "windspeed.csv\nC_aero.csv・グラフPNG", C_PROG_BG, C_MID_BLUE),
+    ("analysis", "比較パワポを更新\n（rigid 実験のみ）", RGBColor(0xEE, 0xE7, 0xF6), C_PURPLE),
 ]
+bw, bh, gap = Inches(2.7), Inches(1.85), Inches(0.55)
+total = len(flow) * bw + (len(flow) - 1) * gap
+sx = (SW - total) / 2
+y = Inches(1.8)
+for i, (ttl, body, bg, fg) in enumerate(flow):
+    x = sx + i * (bw + gap)
+    add_rect(slide, x, y, bw, bh, fill=bg, border=fg, border_w=Pt(2.5))
+    add_rect(slide, x, y, bw, Inches(0.55), fill=fg)
+    add_text(slide, ttl, x, y + Inches(0.05), bw, Inches(0.45),
+             font_size=Pt(15), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
+    add_text(slide, body, x + Inches(0.1), y + Inches(0.68), bw - Inches(0.2), Inches(1.05),
+             font_size=Pt(12.5), color=C_TEXT, align=PP_ALIGN.CENTER)
+    if i < len(flow) - 1:
+        add_text(slide, "▶", x + bw, y + Inches(0.62), gap, Inches(0.6),
+                 font_size=Pt(24), bold=True, color=C_MID_BLUE, align=PP_ALIGN.CENTER)
 
-box_w2 = Inches(2.35)
-box_h2 = Inches(3.5)
-start_x2 = Inches(0.4)
-gap2 = Inches(0.18)
-y2 = Inches(1.1)
+note_bar(slide, "📁 実験フォルダの中身（output_dir/<実験名>/）",
+         ["data/ … 各計測点の6軸センサCSV     ＊_volt_summary.csv … フェーズ毎の差圧電圧",
+          "＊_experiment_log.json … 気温・気圧・校正定数      windspeed.csv / C_aero.csv / ＊.png … 後処理で生成"],
+         Inches(0.4), Inches(4.05), Inches(12.53), Inches(1.15), C_MID_BLUE, C_PROG_BG)
 
-for i, (alpha, title_s, body) in enumerate(steps7):
-    x = start_x2 + i * (box_w2 + gap2)
-    add_rect(slide, x, y2, box_w2, box_h2,
-             fill=C_PROG_BG, border=C_MID_BLUE, border_w=Pt(2.0))
-    # アルファベット円
-    add_rect(slide, x + Inches(0.05), y2 + Inches(0.06),
-             Inches(0.4), Inches(0.4), fill=C_MID_BLUE, border=None)
-    add_text(slide, alpha, x + Inches(0.05), y2 + Inches(0.06),
-             Inches(0.4), Inches(0.4),
-             font_size=Pt(14), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-    add_text(slide, title_s,
-             x + Inches(0.1), y2 + Inches(0.52),
-             box_w2 - Inches(0.2), Inches(0.5),
-             font_size=Pt(13), bold=True, color=C_DARK_BLUE, align=PP_ALIGN.CENTER)
-    add_text(slide, body,
-             x + Inches(0.12), y2 + Inches(1.05),
-             box_w2 - Inches(0.24), Inches(2.3),
-             font_size=Pt(11), color=C_TEXT, align=PP_ALIGN.CENTER)
-    if i < len(steps7) - 1:
-        ax = x + box_w2 + Inches(0.03)
-        add_text(slide, "▶", ax, y2 + Inches(1.4),
-                 gap2 - Inches(0.03), Inches(0.5),
-                 font_size=Pt(18), color=C_MID_BLUE, align=PP_ALIGN.CENTER)
-
-# 補足
-add_label_box(slide, "⚙ モニター画面（WindyMonitor）の表示内容",
-              C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
-              [
-                  "・現在の迎角 / 進捗バー（何点目/何点中）",
-                  "・6軸センサの振動波形（直近0.5秒をオシロスコープ的に表示）",
-                  "・差圧電圧のリアルタイム値",
-                  "・ファイルサイズ進捗バー（6軸センサ計測の完了度を視覚化）",
-                  "・「一時停止」ボタン → 押すと「再開」「停止」の2ボタンが現れる",
-              ],
-              Inches(0.4), Inches(4.75), Inches(12.5), Inches(2.1),
-              content_size=Pt(12))
+note_bar(slide, "🔁 後処理だけやり直したいとき",
+         ["MATLAB で  run_postprocess('C:\\…\\WindyData\\実験名')  の1行。",
+          "気温・気圧は実験フォルダの experiment_log.json から自動で読み込まれる。"],
+         Inches(0.4), Inches(5.4), Inches(12.53), Inches(1.1), C_GREEN, C_GREEN_LIGHT)
 
 
 # ============================================================
-#  スライド 8: エラー発生時の対処
+#  スライド 9: ゼロ揚力角からの原点パルス自動修正
 # ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "エラー発生時の対処", "計測中にエラーが起きても対話的に回復できる")
-user_badge(slide, Inches(10.8), Inches(0.25))
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "後処理後の対話：ゼロ揚力角の設定修正",
+             "実験データから迎角0°の原点パルス(origin_pulse)を求め直し、y/n で更新")
+tag_box(slide, "👤 y/n で確認", Inches(11.0), Inches(0.25), C_GREEN, Inches(2.0))
 
-# エラーBOX
-add_rect(slide, Inches(0.4), Inches(1.05), Inches(12.5), Inches(1.1),
-         fill=C_RED_LIGHT, border=C_RED, border_w=Pt(2.0))
+# 仕組みフロー（3ステップ）
+flow2 = [
+    ("① α₀ を推定", "calc_force.py が線形域から\nゼロ揚力角 α₀ を算出", C_PROG_BG, C_MID_BLUE),
+    ("② 推奨値を提示", "推奨 origin_pulse =\n現在値 − round(α₀ × 250)", C_PROG_BG, C_MID_BLUE),
+    ("③ y/n で更新", "y なら config.json の\norigin_pulse を自動書換え", C_GREEN_LIGHT, C_GREEN),
+]
+bw2, bh2, gap2 = Inches(3.7), Inches(1.5), Inches(0.6)
+total2 = len(flow2) * bw2 + (len(flow2) - 1) * gap2
+sx2 = (SW - total2) / 2
+y2 = Inches(1.4)
+for i, (ttl, body, bg, fg) in enumerate(flow2):
+    x = sx2 + i * (bw2 + gap2)
+    add_rect(slide, x, y2, bw2, bh2, fill=bg, border=fg, border_w=Pt(2.2))
+    add_text(slide, ttl, x, y2 + Inches(0.1), bw2, Inches(0.4),
+             font_size=Pt(15), bold=True, color=fg, align=PP_ALIGN.CENTER)
+    add_text(slide, body, x + Inches(0.1), y2 + Inches(0.6), bw2 - Inches(0.2), Inches(0.8),
+             font_size=Pt(12), color=C_TEXT, align=PP_ALIGN.CENTER)
+    if i < len(flow2) - 1:
+        add_text(slide, "▶", x + bw2, y2 + Inches(0.5), gap2, Inches(0.5),
+                 font_size=Pt(22), bold=True, color=C_MID_BLUE, align=PP_ALIGN.CENTER)
+
+# 実際の表示例（端末風）
+add_rect(slide, Inches(0.9), Inches(3.2), Inches(7.4), Inches(2.4),
+         fill=RGBColor(0x1E, 0x1E, 0x1E), border=RGBColor(0x44, 0x44, 0x44))
 add_text(slide,
-         "⚠  エラー発生時 または「停止」ボタン押下時にプログラムが表示するメッセージ（例）",
-         Inches(0.6), Inches(1.08), Inches(12.0), Inches(0.35),
-         font_size=Pt(12), bold=True, color=C_RED)
-add_text(slide,
-         "════════════════════════════════════════\n"
-         "  [エラー] 計測点 5/61 でエラーが発生しました\n"
-         "  フェーズ: Pdata  内容: Timeout reading from serial port\n"
-         "════════════════════════════════════════\n"
-         "どうしますか？  R: 再試行  S: スキップ  P: フェーズ再開  C: フェーズ選択  Q: 終了",
-         Inches(0.6), Inches(1.42), Inches(12.0), Inches(0.65),
-         font_size=Pt(10.5), color=C_TEXT)
+         "==== ゼロ揚力角からの原点パルス修正 ====\n"
+         "  推定ゼロ揚力角 α₀ : +0.772°\n"
+         "  現在の原点パルス  : 11025 pulse\n"
+         "  推奨の原点パルス  : 10832 pulse  (補正 +193 pulse)\n"
+         "  ゼロ揚力角の設定(origin_pulse)を\n"
+         "  この推奨値に修正しますか？ [y/N]:",
+         Inches(1.1), Inches(3.35), Inches(7.0), Inches(2.1),
+         font_size=Pt(12.5), color=RGBColor(0x7F, 0xD9, 0x7F))
 
-# 選択肢一覧
-choices = [
-    ("R", "再試行", C_MID_BLUE,
-     "この計測点をもう一度実行する\n（機器の瞬間的なエラー時に使用）"),
-    ("S", "スキップ", RGBColor(0x6A, 0x0A, 0x8A),
-     "この点を飛ばして次の計測点へ進む\n（1点欠損でよい場合）"),
-    ("P", "フェーズ\n再開", C_ORANGE,
-     "このフェーズを最初からやり直す\n部分データは自動削除される"),
-    ("C", "フェーズ\n選択", RGBColor(0x80, 0x60, 0x00),
-     "やり直すフェーズ番号を選ぶ\n（前のフェーズからやり直す場合）"),
-    ("Q", "終了", C_RED,
-     "実験を中止してプログラムを終了\n機器の接続は自動でクリーンアップ"),
+# 右側の補足
+note_bar(slide, "💡 ポイント",
+         ["・origin_pulse は config.json の1か所で管理",
+          "  （QT_ADL1.m と calc_force.py が共有）。",
+          "・y を選ぶと次回の実験から新しい原点で計測。",
+          "・n なら現状維持。既に推奨値と一致なら",
+          "  「修正不要」と表示してスキップ。",
+          "・対称翼で α₀≈0 になるのが理想。"],
+         Inches(8.5), Inches(3.2), Inches(4.4), Inches(2.4), C_GREEN, C_GREEN_LIGHT)
+
+note_bar(slide, "⚠ 注意",
+         ["α₀（ゼロ揚力角）は翼の取り付け角に対応する。キャンバー翼など α₀≠0 が物理的に正しい",
+          "場合もあるため、推奨値の適用は計測者が y/n で判断する（常に従う必要はない）。"],
+         Inches(0.4), Inches(5.85), Inches(12.53), Inches(1.05), C_ORANGE, C_ORANGE_LIGHT)
+
+
+# ============================================================
+#  スライド 10: よく使うコマンド早見表
+# ============================================================
+slide = prs.slides.add_slide(BLANK)
+slide_header(slide, "よく使うコマンド早見表", "MATLAB コマンドウィンドウで実行")
+
+cmds = [
+    ("run_experiment", C_GREEN, C_GREEN_LIGHT,
+     "実験を最初から実行（計測〜後処理〜比較まで）",
+     ["画面の指示に従うだけ：",
+      "フォルダ名 → 気温・気圧 → 迎角範囲 →",
+      "各フェーズでブロワー確認 → 自動計測 → 自動後処理"]),
+    ("run_postprocess('…実験フォルダ')", C_MID_BLUE, C_PROG_BG,
+     "後処理だけを単体で（再）実行する",
+     ["後処理が失敗したときのやり直し、",
+      "過去実験の再処理（グラフ範囲変更後など）。",
+      "気温・気圧はログから自動取得。"]),
+    ("setup_paths", C_PURPLE, RGBColor(0xEE, 0xE7, 0xF6),
+     "診断ツール・ヘルパを単体で使う前の準備",
+     ["measurement_control / diagnostics を",
+      "パスに追加。実行後は QT_ADL1_check_connection、",
+      "weight_check, tare_measure 等が使える。"]),
 ]
+y = Inches(1.3)
+for cmd, col, bg, sub, lines in cmds:
+    h = Inches(1.7)
+    add_rect(slide, Inches(0.4), y, Inches(12.53), h, fill=bg, border=col, border_w=Pt(1.8))
+    add_rect(slide, Inches(0.4), y, Inches(0.1), h, fill=col)
+    # コマンド（端末風）
+    add_rect(slide, Inches(0.65), y + Inches(0.2), Inches(5.6), Inches(0.6),
+             fill=RGBColor(0x1E, 0x1E, 0x1E))
+    add_text(slide, ">> " + cmd, Inches(0.75), y + Inches(0.28), Inches(5.4), Inches(0.45),
+             font_size=Pt(14), bold=True, color=RGBColor(0x7F, 0xD9, 0x7F))
+    add_text(slide, sub, Inches(0.7), y + Inches(0.95), Inches(5.5), Inches(0.6),
+             font_size=Pt(12.5), bold=True, color=col)
+    add_text(slide, '\n'.join(lines), Inches(6.5), y + Inches(0.18), Inches(6.3), h - Inches(0.3),
+             font_size=Pt(12.5), color=C_TEXT)
+    y += h + Inches(0.18)
 
-box_w3 = Inches(2.35)
-y3 = Inches(2.3)
-bh3 = Inches(3.6)
-for i, (key, title_s, col, body) in enumerate(choices):
-    x = Inches(0.4) + i * (box_w3 + Inches(0.1))
-    add_rect(slide, x, y3, box_w3, bh3, fill=C_GRAY_BG, border=col, border_w=Pt(2.5))
-    add_rect(slide, x, y3, box_w3, Inches(0.7), fill=col, border=None)
-    add_text(slide, key, x, y3, Inches(0.7), Inches(0.7),
-             font_size=Pt(28), bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
-    add_text(slide, title_s, x + Inches(0.72), y3 + Inches(0.12),
-             box_w3 - Inches(0.78), Inches(0.5),
-             font_size=Pt(14), bold=True, color=C_WHITE)
-    add_text(slide, body, x + Inches(0.12), y3 + Inches(0.82),
-             box_w3 - Inches(0.24), bh3 - Inches(0.95),
-             font_size=Pt(12), color=C_TEXT)
-
-# 注意
-add_label_box(slide, "💡 フェーズ再開（P/C）時の部分データ自動削除について",
-              C_ORANGE, C_ORANGE_LIGHT, C_ORANGE,
-              ['P または C でフェーズを最初からやり直す際、'
-               'data/ フォルダ内の当該フェーズのファイルを自動削除してから再計測します。',
-               '後処理（calc_force.py）に余分なデータが混入することを防ぐためです。'],
-              Inches(0.4), Inches(6.0), Inches(12.5), Inches(1.0),
-              content_size=Pt(11))
-
-
-# ============================================================
-#  スライド 9: 全フェーズ完了後の後処理
-# ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "全フェーズ完了後：自動後処理", "make_windspeed.py → calc_force.py を順次実行")
-prog_badge(slide, Inches(10.6), Inches(0.25))
-
-y0 = Inches(1.05)
-
-# Step 1
-add_label_box(slide, "⚙ Step 1：windspeed.csv の生成（make_windspeed.py）",
-              C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
-              [
-                  "【初回のみ】post_process/venv/ に 64bit Python 仮想環境を自動作成",
-                  "          requirements.txt から pandas / numpy / scipy 等を pip install",
-                  "差圧電圧サマリー（Pdata / Mdata の volt_summary.csv）を読み込む",
-                  "experiment_log.json から気温・気圧・校正定数を取得",
-                  "各計測点の差圧電圧 → 動圧水柱高さ → 風速 U [m/s] を計算",
-                  "windspeed.csv として実験フォルダに保存",
-              ],
-              Inches(0.4), y0, Inches(12.5), Inches(2.0),
-              content_size=Pt(13))
-
-# Step 2
-add_label_box(slide, "⚙ Step 2：空力係数グラフの生成（calc_force.py）",
-              C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
-              [
-                  "windspeed.csv と data/ 内の 6軸センサ CSV を読み込む",
-                  "オフセット補正（Pofst / Mofst データを差し引き）を実施",
-                  "Cl, Cd, Cm などの空力係数を迎角ごとに計算",
-                  "グラフ（PNG）を実験フォルダに自動保存",
-              ],
-              Inches(0.4), Inches(3.2), Inches(12.5), Inches(2.0),
-              content_size=Pt(13))
-
-# 完了後のユーザー確認
-add_label_box(slide, "👤 後処理完了後にユーザーがすること",
-              C_GREEN, C_GREEN_LIGHT, C_GREEN,
-              [
-                  "① WindyData/<実験フォルダ>/ を開いて Cl.png / Cd.png などを確認",
-                  "② ブロワーを停止する（有風実験の場合）",
-                  "③ 迎角ステージは自動でホームポジション（0°）に戻っています",
-              ],
-              Inches(0.4), Inches(5.35), Inches(12.5), Inches(1.65),
-              content_size=Pt(13))
-
-# 後処理がスキップされる条件
-add_label_box(slide, "⚠  後処理がスキップされるケース",
-              C_ORANGE, C_ORANGE_LIGHT, C_ORANGE,
-              [
-                  "4フェーズのいずれか volt_summary.csv が欠けている場合は後処理を自動スキップ",
-                  "→ 欠けているフェーズを再実行するか、手動で後処理スクリプトを実行してください",
-              ],
-              Inches(0.4), Inches(7.1), Inches(12.5), Inches(0.85),
-              content_size=Pt(11))
-
-
-# ============================================================
-#  スライド 10: まとめ（チートシート）
-# ============================================================
-slide = prs.slides.add_slide(BLANK_LAYOUT)
-slide_header(slide, "まとめ：操作チートシート", "実験当日に確認するポイント")
-
-y0 = Inches(1.05)
-
-add_label_box(slide, "👤 ユーザーが入力・確認すること（全部で 7ステップ）",
-              C_GREEN, C_GREEN_LIGHT, C_GREEN,
-              [
-                  "1.  run_experiment を実行",
-                  "2.  実験フォルダ名を入力   例: 260605_rigid",
-                  "3.  気温 [℃] を入力",
-                  "4.  気圧 [mmHg] を入力",
-                  "5.  最大迎角を入力   （Enter のみ → 30°）",
-                  "6.  開始フェーズを選択   （Enter のみ → 1: Pofst から）",
-                  "--- フェーズごとに ---",
-                  "7a. 無風フェーズ → ブロワー停止確認 → Enter",
-                  "    （Pofst 直前のみ電圧オフセットが自動計測される、操作不要）",
-                  "7b. 有風フェーズ → ブロワー起動・風速安定後 → Enter",
-              ],
-              Inches(0.4), y0, Inches(6.2), Inches(5.75),
-              content_size=Pt(12))
-
-add_label_box(slide, "⚙ プログラムが自動でやること",
-              C_MID_BLUE, C_PROG_BG, C_MID_BLUE,
-              [
-                  "・機器（ステージ/センサ/デジボル）の接続",
-                  "・フォルダ自動作成（WindyData/<実験名>/data/）",
-                  "・各計測点：ステージ移動→センサ計測→デジボル計測→保存",
-                  "・4フェーズを Pofst→Mofst→Pdata→Mdata の順に自動進行",
-                  "・エラー時：R（再試行）/ S（スキップ）/ P（フェーズ再開）…を確認",
-                  "・全完了後：windspeed.csv → 空力係数グラフを自動生成",
-              ],
-              Inches(6.7), y0, Inches(6.2), Inches(5.75),
-              content_size=Pt(12))
-
-# フッターライン
-add_rect(slide, Inches(0.4), Inches(7.0), Inches(12.5), Inches(0.03),
-         fill=C_MID_BLUE, border=None)
-add_text(slide, "Windy 風洞実験自動計測システム  —  操作マニュアル",
-         Inches(0.4), Inches(7.05), Inches(12.5), Inches(0.35),
-         font_size=Pt(10), color=RGBColor(0x88, 0x88, 0x88), align=PP_ALIGN.CENTER)
+add_text(slide, "Windy 風洞実験自動計測システム  —  フォルダ構成ガイド",
+         Inches(0.4), Inches(7.08), Inches(12.53), Inches(0.32),
+         font_size=Pt(10), color=C_GRAYTXT, align=PP_ALIGN.CENTER)
 
 
 # ============================================================

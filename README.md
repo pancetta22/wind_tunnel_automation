@@ -200,14 +200,17 @@ stage.sweep(0:1:30, 2.0, @myMeasurementFunc);
 
 #### 座標系について
 
+迎角0°の原点は `config.json` の `origin_pulse`（既定 **11025**）で決まります。
+
 | 迎角 | パルス値 |
 |-----|---------|
-| 0° | 11250 pulse |
-| +1° | 11000 pulse |
-| +θ° | 11250 − θ × 250 pulse |
+| 0° | `origin_pulse`（既定 11025）pulse |
+| +1° | `origin_pulse` − 250 pulse |
+| +θ° | `origin_pulse` − θ × 250 pulse |
 
 - 迎角増加方向 = パルス減少（CCW 方向）
 - 分解能：0.004°/pulse（ARS-936-HP）
+- 実験後にゼロ揚力角から推奨原点が提示され、**y/n で `origin_pulse` を自動更新**できます
 
 ---
 

@@ -79,6 +79,9 @@ end
 
 fprintf('[後処理完了] グラフを %s に保存しました。\n\n', exp_dir);
 
+% --- Step 2.5: ゼロ揚力角からの原点パルス修正（確認の上で config.json を更新）---
+prompt_origin_pulse_update_(exp_dir, fullfile(root, 'config.json'));
+
 % --- Step 3: 過去データとの比較（rigid 実験のみ・確認の上で実行）-----------
 [~, exp_name] = fileparts(exp_dir);
 if contains(lower(exp_name), 'rigid')
@@ -103,6 +106,73 @@ if contains(lower(exp_name), 'rigid')
         end
     end
 end
+end
+
+
+function prompt_origin_pulse_update_(exp_dir, config_path)
+    % calc_force.py が出力した zero_lift_report.json を読み、
+    % ゼロ揚力角から求めた推奨原点パルスを提示して、y/n で config.json を更新する。
+    report_path = fullfile(exp_dir, 'zero_lift_report.json');
+    if ~isfile(report_path)
+        return   % レポートが無ければ何もしない（線形域不足などでスキップされた場合）
+    end
+    try
+        rep = jsondecode(fileread(report_path));
+    catch
+        fprintf('[ゼロ揚力角] zero_lift_report.json を読めませんでした。スキップします。\n\n');
+        return
+    end
+
+    cur = rep.current_origin_pulse;
+    sug = rep.suggested_origin_pulse;
+
+    fprintf('==== ゼロ揚力角からの原点パルス修正 ====\n');
+    fprintf('  推定ゼロ揚力角 α₀ : %+.3f°\n', rep.alpha0_deg);
+    fprintf('  現在の原点パルス  : %d pulse\n', cur);
+    fprintf('  推奨の原点パルス  : %d pulse  (補正 %+d pulse)\n', sug, rep.correction_pulse);
+
+    if sug == cur
+        fprintf('  → 既に推奨値と一致しています。修正は不要です。\n\n');
+        return
+    end
+
+    ans_up = strtrim(input('  ゼロ揚力角の設定（origin_pulse）をこの推奨値に修正しますか？ [y/N]: ', 's'));
+    if ~any(strcmpi(ans_up, {'y', 'yes'}))
+        fprintf('  → 修正しませんでした（origin_pulse = %d のまま）。\n\n', cur);
+        return
+    end
+
+    if update_config_value_(config_path, 'origin_pulse', sug)
+        fprintf('  → config.json の origin_pulse を %d に更新しました。\n', sug);
+        fprintf('     次回の実験から新しい原点が反映されます。\n\n');
+    else
+        fprintf('  [警告] config.json を更新できませんでした。手動で origin_pulse を %d にしてください。\n\n', sug);
+    end
+end
+
+
+function ok = update_config_value_(config_path, key, value)
+    % config.json の数値キーをテキスト置換で更新する（コメント・整形・キー順を保持）。
+    % キーが無ければ先頭の "{" 直後に追記する。
+    ok = false;
+    if ~isfile(config_path)
+        return
+    end
+    txt = fileread(config_path);
+    pat = sprintf('("%s"\\s*:\\s*)(-?\\d+(?:\\.\\d+)?)', key);
+    if ~isempty(regexp(txt, pat, 'once'))
+        txt = regexprep(txt, pat, sprintf('$1%d', value), 'once');
+    else
+        % キーが無い場合は最初の { の直後に1行追加
+        txt = regexprep(txt, '\{', sprintf('{\n  "%s": %d,', key, value), 'once');
+    end
+    fid = fopen(config_path, 'w');
+    if fid < 0
+        return
+    end
+    fwrite(fid, txt);
+    fclose(fid);
+    ok = true;
 end
 
 

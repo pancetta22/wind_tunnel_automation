@@ -25,6 +25,7 @@
 
 import os
 import re
+import json
 import pandas as pd
 import numpy as np
 import math
@@ -42,9 +43,24 @@ def angle_from_name(name, sign):
     m = re.search(r"_(\d+)\.\d{2}\.csv$", str(name))
     return sign * int(m.group(1)) if m else 0
 
-# ロータリーステージ設定（QT_ADL1.m の ORIGIN_PULSE / PPD と一致させること）
-ORIGIN_PULSE  = 11025   # 迎角0°に対応する機械座標 [pulse]
+# ロータリーステージ設定
+#   origin_pulse は config.json（リポジトリルート）を唯一の正とする。
+#   → QT_ADL1.m も同じ config.json の origin_pulse を読むため、二重定義の不一致が起きない。
 PULSE_PER_DEG = 250     # pulse per degree (ARS-936-HP: 0.004°/pulse)
+
+
+def _load_origin_pulse(default=11025):
+    """リポジトリルートの config.json から origin_pulse を読む（無ければ既定値）。"""
+    repo_root   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(repo_root, "config.json")
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return int(json.load(f).get("origin_pulse", default))
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return default
+
+
+ORIGIN_PULSE = _load_origin_pulse()   # 迎角0°に対応する機械座標 [pulse]
 
 
 def average():
@@ -514,12 +530,26 @@ def report_zero_lift():
     print(f"  Cl スロープ       : {p[0]:.4f} /°  ({p[0]*180/math.pi:.4f} /rad)")
     print(f"  α₀                : {alpha0:+.3f}°   [Cl(0°) = {Cl_at0:+.4f}]")
     print(sep)
-    print(f"  ※ ORIGIN_PULSE (コード定数) = {ORIGIN_PULSE} pulse")
-    print(f"    ↑ QT_ADL1.m の ORIGIN_PULSE と必ず一致させること")
+    print(f"  現在の原点パルス  : {ORIGIN_PULSE} pulse  (config.json の origin_pulse)")
     print(f"  補正量            : {correction:+d} pulse  ({alpha0:+.3f}°)")
-    print(f"  次回推奨 ORIGIN   : {suggested} pulse")
-    print(f"  → QT_ADL1.m と calc_force.py 冒頭の ORIGIN_PULSE を")
-    print(f"    {suggested} に更新してから次の実験を行ってください。")
+    print(f"  次回推奨 origin   : {suggested} pulse")
+    print(sep)
+
+    # MATLAB 側（run_postprocess.m）が読み取り、y/n で config.json を更新する用のレポート。
+    report = {
+        "alpha0_deg":            round(float(alpha0), 4),
+        "Cl_slope_per_deg":      round(float(p[0]), 6),
+        "current_origin_pulse":  int(ORIGIN_PULSE),
+        "suggested_origin_pulse": int(suggested),
+        "correction_pulse":      int(correction),
+        "pulse_per_deg":         int(PULSE_PER_DEG),
+    }
+    try:
+        with open("zero_lift_report.json", "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        print("  → ゼロ揚力角レポートを zero_lift_report.json に保存しました。")
+    except OSError as e:
+        print(f"  [警告] zero_lift_report.json を保存できませんでした: {e}")
     print(sep)
 
 

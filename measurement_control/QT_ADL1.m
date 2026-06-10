@@ -11,8 +11,8 @@ classdef QT_ADL1 < handle
 %   delete(stage);                    % 切断
 %
 % 座標系:
-%   迎角0° = 11025 pulse (機械原点から11025 pulse の位置)
-%   迎角θ° = 11025 - θ×250 pulse  (角度増加 → パルス減少 / CCW方向)
+%   迎角0° = originPulse (既定 11025 pulse / config.json の origin_pulse で指定)
+%   迎角θ° = originPulse - θ×250 pulse  (角度増加 → パルス減少 / CCW方向)
 %
 % 通信仕様 (工場出荷時デフォルト):
 %   ボーレート : 9600 bps
@@ -25,31 +25,39 @@ classdef QT_ADL1 < handle
     properties
         port            % serialport オブジェクト
         pulsePerDeg     % 1度あたりのパルス数
+        originPulse     % 迎角0°に対応する機械座標 [pulse]（config.json の origin_pulse）
     end
 
     properties (Constant)
-        BAUD_RATE     = 9600;
-        TIMEOUT_S     = 30;     % 移動完了待ちタイムアウト [秒]
-        POLL_INTERVAL = 0.05;   % ステータスポーリング間隔 [秒]
-        ORIGIN_PULSE  = 11025;  % 迎角0°に対応する機械座標 [pulse]
-        PPD           = 250;    % pulse per degree (ARS-936-HP: 0.004°/pulse)
+        BAUD_RATE       = 9600;
+        TIMEOUT_S       = 30;     % 移動完了待ちタイムアウト [秒]
+        POLL_INTERVAL   = 0.05;   % ステータスポーリング間隔 [秒]
+        ORIGIN_PULSE_DEFAULT = 11025;  % origin_pulse 未指定時の既定値 [pulse]
+        PPD             = 250;    % pulse per degree (ARS-936-HP: 0.004°/pulse)
     end
 
     %% ======== パブリックメソッド ========
     methods
 
         % ----- コンストラクタ -----
-        function obj = QT_ADL1(comPort, pulsePerDeg)
-            % QT_ADL1(comPort)              : デフォルト pulsePerDeg = 250
-            % QT_ADL1(comPort, pulsePerDeg) : パルス/度 を明示指定
+        function obj = QT_ADL1(comPort, pulsePerDeg, originPulse)
+            % QT_ADL1(comPort)
+            %   : pulsePerDeg=250, originPulse=11025（既定）
+            % QT_ADL1(comPort, pulsePerDeg, originPulse)
+            %   : パルス/度・迎角0°の原点パルスを明示指定
+            %     （run_experiment は config.json の origin_pulse を渡す）
             %
             % ARS-936-HP の場合:
             %   分解能 0.004°/pulse → pulsePerDeg = 1/0.004 = 250
 
-            if nargin < 2
+            if nargin < 2 || isempty(pulsePerDeg)
                 pulsePerDeg = obj.PPD;
             end
+            if nargin < 3 || isempty(originPulse)
+                originPulse = obj.ORIGIN_PULSE_DEFAULT;
+            end
             obj.pulsePerDeg = pulsePerDeg;
+            obj.originPulse = originPulse;
 
             obj.port = serialport(comPort, obj.BAUD_RATE, ...
                 'DataBits',    8,      ...
@@ -62,7 +70,7 @@ classdef QT_ADL1 < handle
 
             fprintf('[QT-ADL1] %s に接続しました (%.0f bps)\n', comPort, obj.BAUD_RATE);
             fprintf('[QT-ADL1] 座標系: 迎角0° = %d pulse, %.4f°/pulse\n', ...
-                obj.ORIGIN_PULSE, 1/obj.pulsePerDeg);
+                obj.originPulse, 1/obj.pulsePerDeg);
         end
 
         % ----- デストラクタ -----
@@ -81,8 +89,8 @@ classdef QT_ADL1 < handle
             obj.waitForStop();
             fprintf('[QT-ADL1] 機械原点に到達\n');
 
-            fprintf('[QT-ADL1] 迎角0°へ移動中 (%d pulse)...\n', obj.ORIGIN_PULSE);
-            obj.moveAbsolute(obj.ORIGIN_PULSE);
+            fprintf('[QT-ADL1] 迎角0°へ移動中 (%d pulse)...\n', obj.originPulse);
+            obj.moveAbsolute(obj.originPulse);
             fprintf('[QT-ADL1] 迎角0°に到達\n');
         end
 
@@ -90,7 +98,7 @@ classdef QT_ADL1 < handle
         function moveToAngle(obj, angle_deg)
             % 迎角 angle_deg [度] へ絶対移動する
             % 座標変換: pulse = ORIGIN_PULSE - angle_deg × pulsePerDeg
-            pulses = obj.ORIGIN_PULSE - round(angle_deg * obj.pulsePerDeg);
+            pulses = obj.originPulse - round(angle_deg * obj.pulsePerDeg);
             fprintf('[QT-ADL1] 迎角移動: %.4f° → %+d pulse\n', angle_deg, pulses);
             obj.moveAbsolute(pulses);
         end
@@ -99,7 +107,7 @@ classdef QT_ADL1 < handle
         function angle = getAngle(obj)
             % 戻り値: 迎角 [度]
             pos   = obj.getPosition();
-            angle = (obj.ORIGIN_PULSE - pos) / obj.pulsePerDeg;
+            angle = (obj.originPulse - pos) / obj.pulsePerDeg;
         end
 
         % ----- 現在位置取得（パルス単位）-----
