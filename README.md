@@ -3,6 +3,22 @@
 MATLAB + Python による風洞実験の自動計測・制御システムです。
 迎角ステージ（QT-ADL1）と6軸力覚センサ（Leptrino）、デジタルマルチメータ（R6441B）を統合して実験を制御します。
 
+## クイックスタート（最短手順）
+
+```matlab
+% 1. config.json.example をコピーして config.json を作り、COMポート等を設定（初回のみ）
+% 2. MATLAB でリポジトリのフォルダに cd して：
+run_experiment
+```
+
+あとは画面の指示に従うだけ（気温・気圧 → 迎角範囲 → 計測 → 後処理・グラフ生成まで自動）。
+よく使うコマンドは他に2つ：
+
+```matlab
+setup_paths                                  % 診断ツールを単体で使う前に1回実行
+run_postprocess('C:\...\WindyData\実験名')    % 後処理だけをやり直す／過去実験を再処理する
+```
+
 ---
 
 ## 構成機器
@@ -77,6 +93,8 @@ C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe
 ```
 Windy/
 ├── run_experiment.m            # メイン実験スクリプト（これを実行）
+├── run_postprocess.m           # 後処理だけを単体で（再）実行
+├── setup_paths.m               # 診断ツール等を単体で使う前に実行（パス追加）
 ├── config.json.example         # 設定ファイルのテンプレート
 ├── config.json                 # 各自の設定（Git管理外）
 ├── README.md / SPEC.md / Windy.prj
@@ -107,13 +125,24 @@ Windy/
 └── analysis/                   # 分析・比較パワポ（自動更新）
 ```
 
-> ※ measurement_control・diagnostics のファイルはサブフォルダへ移動しましたが、`run_experiment.m`
-> が起動時に `measurement_control` をパスに追加し、各診断ツールも `config.json` / `leptrino/` を
-> リポジトリルート基準で参照するため、**従来どおり関数名・スクリプト名で実行できます**。
+> ※ **本計測（`run_experiment`）はそのまま実行できます**（起動時に自分で
+> `measurement_control` をパスに追加します）。
+>
+> ※ 診断ツールやヘルパ（`QT_ADL1_check_connection` / `weight_check` /
+> `get_sensor_data` 等）を**単体で使うときは、先に一度 `setup_paths` を実行**して
+> ください（measurement_control / diagnostics をパスへ追加します）。
+> 各ツールは `config.json` / `leptrino/` をリポジトリルート基準で参照するため、
+> パスさえ通れば従来どおり関数名・スクリプト名で実行できます。
 
 ---
 
 ## 使い方
+
+> 以下の関数・スクリプトを単体で使う前に、リポジトリのルートで一度実行：
+>
+> ```matlab
+> setup_paths
+> ```
 
 ### 迎角ステージ（QT-ADL1）
 

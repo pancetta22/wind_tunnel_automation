@@ -3,14 +3,14 @@
 """
 update_aero_data.py
 "rigid" を名前に含む実験フォルダの post_process 出力（C_aero.csv）を
-この考察フォルダの aero_data/ に同期し、研究室フォーマットの比較パワポを再生成する。
+この analysis フォルダの aero_data/ に同期し、研究室フォーマットの比較パワポを再生成する。
 
   rigid 実験を計測・後処理（calc_force.py）したあとに、これ1つを実行すれば
   aero_data への取り込みとパワポ更新が自動で行われる。
 
 使い方:
     python update_aero_data.py [実験フォルダの親ディレクトリ ...]
-      - 引数を省略すると DEFAULT_SOURCES を走査する
+      - 引数を省略すると config.json の output_dir を走査する（Windows/Mac 共通）
       - 例: python update_aero_data.py C:/Users/<name>/WindyData
 
 仕様:
@@ -22,6 +22,7 @@ update_aero_data.py
 
 import os
 import sys
+import json
 import shutil
 import subprocess
 
@@ -29,10 +30,22 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AERO_DATA  = os.path.join(SCRIPT_DIR, "aero_data")
 GEN_SCRIPT = os.path.join(SCRIPT_DIR, "make_rigid_comparison_local.py")
 
-# 既定の探索元（環境に合わせて編集、または実行時に引数で指定）
-DEFAULT_SOURCES = [
-    "/Users/yuyaokamoto/Downloads/imamura_lab/windtunnel_force_measurement",
-]
+
+def default_sources():
+    """引数なしの場合の既定探索元：リポジトリルートの config.json の output_dir。
+    config.json が無い・読めない場合は空リスト（メッセージのみ表示）。"""
+    config_path = os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            output_dir = json.load(f).get("output_dir", "")
+        if output_dir and os.path.isdir(output_dir):
+            return [output_dir]
+        if output_dir:
+            print(f"[注意] config.json の output_dir が存在しません: {output_dir}")
+    except (OSError, json.JSONDecodeError):
+        print(f"[注意] config.json を読めませんでした: {config_path}")
+    print("       探索元を引数で指定してください: python update_aero_data.py <親ディレクトリ>")
+    return []
 
 
 def _same(a, b):
@@ -67,8 +80,9 @@ def sync(sources):
 
 
 def main():
-    sources = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_SOURCES
-    print(f"[探索元] {', '.join(sources)}")
+    sources = sys.argv[1:] if len(sys.argv) > 1 else default_sources()
+    if sources:
+        print(f"[探索元] {', '.join(sources)}")
     copied = sync(sources)
     if copied:
         print(f"[同期] {len(copied)} 件をコピー/更新:")

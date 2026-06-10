@@ -25,10 +25,22 @@ fprintf('\n========================================\n');
 fprintf('  Windy 風洞実験自動計測システム\n');
 fprintf('========================================\n\n');
 
+% 前回の実行が Ctrl+C やエラーで中断されていた場合、COM ポートが掴まれた
+% ままになっている。残っている解放ガードをここでクリアして発火させ、
+% 前回分のデバイス接続を解放してから始める（"serialport unable to read" 対策）。
+clear windy_cleanup_guard_
+
+% Python 設定の事前確認（leptrino=32bit 必須 / 後処理=64bit 推奨）。
+% 取り違えると接続後・実験完了後に遅れて失敗するため、ここで検出する。
+check_python_bits_(cfg.python_exe, 32, 'python_exe（Leptrino 計測用）');
+if ~isempty(cfg.python_exe_64)
+    check_python_bits_(cfg.python_exe_64, 64, 'python_exe_64（後処理用）');
+end
+
 % =====================================================================
 %  0.5. 実験フォルダ名の入力
 % =====================================================================
-exp_name = input_experiment_name_();
+exp_name = input_experiment_name_(cfg.output_dir);
 exp_dir  = fullfile(cfg.output_dir, exp_name);
 data_dir = fullfile(exp_dir, 'data');
 [~, ~]   = mkdir(data_dir);
@@ -52,6 +64,11 @@ s_volt = connect_r6441b_(cfg.r6441b_port, cfg.r6441b_timeout_sec);
 
 monitor = WindyMonitor(cfg.force_sensor_size_limit_kb);
 monitor.setDataSource(@() logger.getRecentRows(600));   % 6軸グラフ: 直近 0.5 秒をローリング表示
+
+% 解放ガード：スクリプトがエラーで止まっても、この変数がクリアされる時に
+% 必ず cleanup_devices_ が走り、COM ポート・Python プロセスを解放する。
+% （正常終了時の明示的な cleanup_devices_ と二重に呼ばれても安全）
+windy_cleanup_guard_ = onCleanup(@() cleanup_devices_(stage, logger, s_volt, monitor)); %#ok<NASGU>
 
 % =====================================================================
 %  2. 実験設定（気象条件・迎角範囲・開始フェーズ）
@@ -362,7 +379,7 @@ switch exp_control
         need_met = any(strcmpi(ans_met, {'y', 'yes'}));
 
         % --- 新しい実験フォルダを用意（前回データと混ざらないよう別フォルダ）---
-        exp_name = input_experiment_name_();
+        exp_name = input_experiment_name_(cfg.output_dir);
         exp_dir  = fullfile(cfg.output_dir, exp_name);
         data_dir = fullfile(exp_dir, 'data');
         [~, ~]   = mkdir(data_dir);
@@ -412,6 +429,21 @@ function cfg = load_config_(base_dir)
     end
     cfg = jsondecode(fileread(config_path));
 
+    % --- 必須キーの検証（欠けていると後で意味不明なエラーになるため先に確認）---
+    required = {'python_exe', 'qt_adl1_port', 'r6441b_port', 'leptrino_port', ...
+                'output_dir', 'calib_a', 'calib_b'};
+    missing = {};
+    for i = 1:numel(required)
+        if ~isfield(cfg, required{i}) || isempty(cfg.(required{i}))
+            missing{end+1} = required{i}; %#ok<AGROW>
+        end
+    end
+    if ~isempty(missing)
+        error(['config.json に必須キーが設定されていません: %s\n' ...
+               'config.json.example を参考に設定してください。\n  パス: %s'], ...
+              strjoin(missing, ', '), config_path);
+    end
+
     if ~isfield(cfg, 'force_sensor_size_limit_kb') || isempty(cfg.force_sensor_size_limit_kb)
         cfg.force_sensor_size_limit_kb = 1000;
     end
@@ -435,6 +467,34 @@ function cfg = load_config_(base_dir)
     end
     if ~isfield(cfg, 'calib_b') || isempty(cfg.calib_b)
         cfg.calib_b = -0.340200009144243;
+    end
+end
+
+function check_python_bits_(python_exe, want_bits, label)
+    % Python のビット数を確認する。
+    % Leptrino の CfsUsb.dll は 32bit 専用、後処理の venv は 64bit が必要なため、
+    % 設定の取り違えを実験開始前に検出する。
+    cmd = sprintf('"%s" -c "import struct; print(struct.calcsize(''P'')*8)"', python_exe);
+    [st, out] = system(cmd);
+    if st ~= 0
+        error(['[設定確認] %s を実行できません。\n' ...
+               '  config.json のパスを確認してください: %s'], label, python_exe);
+    end
+    bits = str2double(strtrim(out));
+    if isnan(bits)
+        fprintf('[設定確認] %s のビット数を判定できませんでした（そのまま続行します）。\n', label);
+        return
+    end
+    if bits ~= want_bits
+        if want_bits == 32
+            error(['[設定確認] %s は %dbit Python です（32bit が必要）。\n' ...
+                   '  Leptrino の CfsUsb.dll は 32bit 専用のため、このままでは計測できません。\n' ...
+                   '  config.json の python_exe に 32bit Python のパスを設定してください。\n' ...
+                   '  現在の設定: %s'], label, bits, python_exe);
+        else
+            fprintf(['[警告] %s は %dbit Python です（64bit 推奨）。\n' ...
+                     '       後処理パッケージの導入に失敗する可能性があります。\n\n'], label, bits);
+        end
     end
 end
 
@@ -673,29 +733,34 @@ function offset_mV = measure_volt_offset_(s_volt)
     fprintf('  → 電圧オフセット = %+.4f mV  (%d サンプル)\n\n', offset_mV, n);
 end
 
-function name = input_experiment_name_()
+function name = input_experiment_name_(output_dir)
     fprintf('=== 実験フォルダ名の入力 ===\n');
     fprintf('  例: 260604_rigid\n\n');
     forbidden = '/\:*?"<>|';
     while true
         name = strtrim(input('実験フォルダ名: ', 's'));
-        if ~isempty(name) && ~any(ismember(name, forbidden)), break; end
-        fprintf('  ※ 有効なフォルダ名を入力してください（空白のみ・特殊文字 %s 不可）\n', forbidden);
+        if isempty(name) || any(ismember(name, forbidden))
+            fprintf('  ※ 有効なフォルダ名を入力してください（空白のみ・特殊文字 %s 不可）\n', forbidden);
+            continue;
+        end
+        % 既存フォルダにデータが残っている場合は確認する。
+        % 同名フォルダを再利用すると data/ に前回の CSV が混在し、
+        % calc_force の結果が汚染されるため（既定は別名の入力へ戻る）。
+        if nargin >= 1
+            old_csv = dir(fullfile(output_dir, name, 'data', '*.csv'));
+            if ~isempty(old_csv)
+                fprintf('  ※ フォルダ [%s] には既に計測データがあります（%d ファイル）。\n', ...
+                        name, numel(old_csv));
+                fprintf('     同じフォルダに追加すると前回のデータと混ざり、結果が汚染されます。\n');
+                ans_ow = strtrim(input('     それでもこのフォルダを使いますか？ [y/N]: ', 's'));
+                if ~any(strcmpi(ans_ow, {'y', 'yes'}))
+                    continue;   % 別名を入力し直す
+                end
+            end
+        end
+        break;
     end
     fprintf('→ フォルダ名 [%s] を使用\n\n', name);
-end
-
-function max_angle = input_max_angle_()
-    fprintf('=== 迎角範囲の設定 ===\n\n');
-    while true
-        val = input('最大迎角 [度, 1-30, デフォルト=30]: ');
-        if isempty(val), max_angle = 30; break; end
-        if isnumeric(val) && isscalar(val) && val >= 1 && val <= 30 && val == floor(val)
-            max_angle = val; break;
-        end
-        fprintf('  ※ 1〜30 の整数を入力してください。\n');
-    end
-    fprintf('→ 最大迎角 %d°（%d 点/フェーズ）\n\n', max_angle, 1 + max_angle * 2);
 end
 
 function [max_angle, angle_step, phase_enabled] = configure_angle_sweep_()
@@ -887,13 +952,9 @@ function delete_phase_data_(data_dir, date_str, phase)
 end
 
 function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
-    % 全4フェーズの volt_summary が揃っていれば後処理を実行する
-    %   Step 0: post_process/venv が未作成なら 64bit Python で作成・パッケージインストール
-    %   Step 1: make_windspeed.py → windspeed.csv
-    %   Step 2: calc_force.py    → 空力係数 CSV・グラフ PNG
-
     % 計測したフェーズの volt_summary が揃っていれば後処理を実行する。
     % 片側のみの計測（正のみ／負のみ）では、計測していないフェーズは要求しない。
+    % 後処理の本体はルートの run_postprocess.m（単体での再実行も可能）。
     phases = {'Pofst', 'Mofst', 'Pdata', 'Mdata'};
     for i = 1:numel(phases)
         if nargin >= 4 && ~phase_enabled(i)
@@ -901,151 +962,12 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
         end
         fname = make_filename(date_str, '', phases{i}, 0, 0, 'volt_summary');
         if ~isfile(fullfile(exp_dir, fname))
-            fprintf('[後処理] %s がまだありません → 後処理をスキップ\n\n', fname);
+            fprintf('[後処理] %s がまだありません → 後処理をスキップ\n', fname);
+            fprintf('         後で再実行する場合: run_postprocess(''%s'')\n\n', exp_dir);
             return
         end
     end
 
     fprintf('\n[後処理] 全フェーズのデータが揃いました。後処理を開始します...\n\n');
-
-    script_dir   = fileparts(mfilename('fullpath'));
-    make_ws_path = fullfile(script_dir, 'post_process', 'make_windspeed.py');
-    calc_f_path  = fullfile(script_dir, 'post_process', 'calc_force.py');
-
-    % --- Step 0: 仮想環境の準備 ---
-    py64 = cfg.python_exe_64;
-    if isempty(py64)
-        fprintf('[警告] python_exe_64 が config.json に設定されていません。\n');
-        fprintf('         32bit Python (%s) で後処理を試みます。\n\n', cfg.python_exe);
-        py64 = cfg.python_exe;
-    end
-    venv_python = setup_postprocess_venv_(script_dir, py64);
-
-    % --- Step 1: windspeed.csv 生成 ---
-    fprintf('[後処理 1/2] windspeed.csv を生成中...\n');
-    cmd_ws = sprintf('"%s" "%s" --volt_dir "%s" --date %s --out "%s"', ...
-        venv_python, make_ws_path, exp_dir, date_str, exp_dir);
-    [st1, out1] = system(cmd_ws);
-    if ~isempty(strtrim(out1)), fprintf('%s\n', out1); end
-    if st1 ~= 0
-        fprintf('[警告] make_windspeed.py に失敗しました（終了コード %d）。後処理を中断します。\n\n', st1);
-        return
-    end
-
-    % --- Step 2: calc_force.py で空力係数・グラフ生成 ---
-    fprintf('[後処理 2/2] 空力係数を計算・グラフを出力中...\n');
-    prev_dir = cd(exp_dir);
-    [st2, out2] = system(sprintf('"%s" "%s"', venv_python, calc_f_path));
-    cd(prev_dir);
-    if ~isempty(strtrim(out2)), fprintf('%s\n', out2); end
-    if st2 ~= 0
-        fprintf('[警告] calc_force.py に失敗しました（終了コード %d）。\n\n', st2);
-        return
-    end
-
-    fprintf('[後処理完了] グラフを %s に保存しました。\n\n', exp_dir);
-
-    % --- Step 3: 過去データとの比較（rigid 実験のみ・確認の上で実行）---
-    [~, exp_name] = fileparts(exp_dir);
-    if contains(lower(exp_name), 'rigid')
-        ans_cmp = input('過去データと比較しますか？ [y/N]: ', 's');
-        if any(strcmpi(strtrim(ans_cmp), {'y', 'yes'}))
-            updater = fullfile(script_dir, 'analysis', 'update_aero_data.py');
-            if ~isfile(updater)
-                fprintf('[比較] update_aero_data.py が見つかりません: %s\n\n', updater);
-                return
-            end
-            % 実験フォルダの親を探索元として、空力データ同期＋パワポ再生成
-            % （venv セットアップで python-pptx 含む必要モジュールは導入済み）
-            src_parent = fileparts(exp_dir);
-            fprintf('[比較] 過去データと比較し、analysis フォルダのパワポを更新します...\n');
-            [stc, outc] = system(sprintf('"%s" "%s" "%s"', ...
-                venv_python, updater, src_parent));
-            if ~isempty(strtrim(outc)), fprintf('%s\n', outc); end
-            if stc == 0
-                fprintf('[比較完了] analysis フォルダの比較パワポを更新しました。\n\n');
-            else
-                fprintf('[比較] 失敗しました（終了コード %d）。\n\n', stc);
-            end
-        end
-    end
-end
-
-function venv_python = setup_postprocess_venv_(script_dir, python_exe_64)
-    % post_process/venv を用意して venv の python パスを返す。
-    %   1. venv が無ければ 64bit Python で作成 → requirements をインストール
-    %   2. 既存 venv のパッケージが足りなければ再インストール
-    %   3. それでも直らなければ venv フォルダを自動削除して作り直す
-    %  → 半端な venv / 32bit で作られた古い venv でも自動で復旧する。
-
-    venv_dir = fullfile(script_dir, 'post_process', 'venv');
-    req_path = fullfile(script_dir, 'post_process', 'requirements.txt');
-
-    if ispc
-        venv_python = fullfile(venv_dir, 'Scripts', 'python.exe');
-    else
-        venv_python = fullfile(venv_dir, 'bin', 'python');
-    end
-
-    % 1回目: 既存 venv で試す / 2回目: 削除して作り直して試す
-    for attempt = 1:2
-
-        % --- 2回目は venv フォルダを丸ごと削除してから作り直す ---
-        if attempt == 2
-            fprintf('[後処理] venv が正常に使えないため、削除して作り直します...\n');
-            if isfolder(venv_dir)
-                try
-                    rmdir(venv_dir, 's');
-                catch ME
-                    error(['[後処理] venv フォルダを削除できませんでした: %s\n' ...
-                           '  手動で次を削除してください: %s'], ME.message, venv_dir);
-                end
-            end
-        end
-
-        % --- venv 本体が無ければ作成 ---
-        if ~isfile(venv_python)
-            fprintf('[後処理] 仮想環境を作成しています（64bit Python）: %s\n', venv_dir);
-            fprintf('         使用 Python: %s\n', python_exe_64);
-            [st, out] = system(sprintf('"%s" -m venv "%s"', python_exe_64, venv_dir));
-            if ~isempty(strtrim(out)), fprintf('%s\n', out); end
-            if st ~= 0 || ~isfile(venv_python)
-                if attempt == 1, continue; end   % 作成失敗 → 作り直しへ
-                error(['[後処理] 仮想環境の作成に失敗しました（終了コード %d）。\n' ...
-                       '  config.json の "python_exe_64" に 64bit Python(.exe) の正しいパスを設定してください。\n' ...
-                       '  指定値: %s'], st, python_exe_64);
-            end
-        end
-
-        % --- 主要パッケージが導入済みか確認（pip show は引用符問題が無く安全）---
-        [s_pd, ~] = system(sprintf('"%s" -m pip show pandas',      venv_python));
-        [s_px, ~] = system(sprintf('"%s" -m pip show python-pptx', venv_python));
-        if s_pd == 0 && s_px == 0
-            return   % 正常 → そのまま使う
-        end
-
-        % --- 不足 → pip でインストール ---
-        fprintf('[後処理] 必要パッケージをインストールしています...\n');
-        system(sprintf('"%s" -m pip install --upgrade pip -q', venv_python));
-        [~, out] = system(sprintf('"%s" -m pip install -r "%s"', venv_python, req_path));
-        if ~isempty(strtrim(out)), fprintf('%s\n', out); end
-
-        % --- インストール後の再確認 ---
-        [s_pd2, ~] = system(sprintf('"%s" -m pip show pandas',      venv_python));
-        [s_px2, ~] = system(sprintf('"%s" -m pip show python-pptx', venv_python));
-        if s_pd2 == 0 && s_px2 == 0
-            fprintf('[後処理] パッケージのセットアップ完了。\n\n');
-            return   % 正常
-        end
-
-        % --- まだダメ ---
-        if attempt == 1
-            fprintf('[後処理] 既存 venv では復旧できませんでした。作り直します。\n');
-            % continue（次の attempt で削除→再作成）
-        else
-            error(['[後処理] venv を作り直してもパッケージを導入できませんでした。\n' ...
-                   '  64bit Python のパス（python_exe_64）と pip のネットワーク接続を確認してください。\n' ...
-                   '  Python: %s'], python_exe_64);
-        end
-    end
+    run_postprocess(exp_dir, cfg);
 end
