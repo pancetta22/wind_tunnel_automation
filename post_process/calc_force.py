@@ -24,6 +24,7 @@
 #   Cl.png, Cd.png, Cm.png, polar.png, Cl_PM.png, Cd_PM.png, Cm_PM.png
 
 import os
+import re
 import pandas as pd
 import numpy as np
 import math
@@ -31,6 +32,15 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from tqdm import tqdm
 import traceback
+
+
+def angle_from_name(name, sign):
+    """ファイル名（..._Pdata_10.01.csv 等）から参照迎角を取り出す。
+    刻み幅が 1° 以外でも、行番号ではなく実際の角度を AoA に使えるようにする。
+    sign: 正フェーズ(P)は +1、負フェーズ(M)は -1。
+    """
+    m = re.search(r"_(\d+)\.\d{2}\.csv$", str(name))
+    return sign * int(m.group(1)) if m else 0
 
 # ロータリーステージ設定（QT_ADL1.m の ORIGIN_PULSE / PPD と一致させること）
 ORIGIN_PULSE  = 11025   # 迎角0°に対応する機械座標 [pulse]
@@ -177,10 +187,12 @@ def drift():
     Mofst = pd.DataFrame(Mofst, columns=data.columns)
     Pdata = pd.DataFrame(Pdata, columns=data.columns)
     Mdata = pd.DataFrame(Mdata, columns=data.columns)
-    Pofst["AoA"] = Pofst.index
-    Pdata["AoA"] = Pdata.index
-    Mofst["AoA"] = -Mofst.index
-    Mdata["AoA"] = -Mdata.index
+    # AoA はファイル名の参照迎角から決める（刻み幅が 1° 以外でも正しくなる）。
+    # 旧実装は行番号（index）を使っていたため、刻み幅 1° 以外で角度がずれていた。
+    Pofst["AoA"] = [angle_from_name(n, +1) for n in Pofst["name"]]
+    Pdata["AoA"] = [angle_from_name(n, +1) for n in Pdata["name"]]
+    Mofst["AoA"] = [angle_from_name(n, -1) for n in Mofst["name"]]
+    Mdata["AoA"] = [angle_from_name(n, -1) for n in Mdata["name"]]
 
     data_wind = pd.read_csv("windspeed.csv", skiprows=2)
     rho = float(pd.read_csv("windspeed.csv", header=None).iloc[0, 1])
@@ -404,6 +416,13 @@ def plot_C_aero():
 
 def plot_PM():
     data = pd.read_csv("C_aero.csv", delimiter=",")
+
+    # P-M 比較は正負両方のデータが前提。片側のみ（正のみ／負のみ）の計測では
+    # 左右対称に分割できないためスキップする。
+    if (data["AoA"] > 0).sum() == 0 or (data["AoA"] < 0).sum() == 0:
+        print("[plot_PM] 片側のみの計測のため P-M 比較図はスキップします。")
+        return
+
     textsize = 24
     lw = 3
     mk = 8

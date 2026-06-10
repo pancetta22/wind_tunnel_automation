@@ -71,25 +71,30 @@ n_phases   = numel(all_phases);
 %    計測を途中から    → need_met=false かつ preset_start を選択フェーズに設定
 need_met     = true;   % 気温・気圧を入力するか
 preset_start = 0;      % >0 なら開始フェーズを固定（途中からやり直し用。迎角範囲は引き継ぐ）
+% 迎角スイープ設定の既定値（configure_angle_sweep_ で上書き。再開時はこの値を継続）
+max_angle     = 30;
+angle_step    = 1;
+phase_enabled = [true true true true];   % [Pofst Mofst Pdata Mdata]
 while true
 
-% ---- 気象条件（必要時のみ入力）----
+% ---- 気象条件（必要時のみ入力。再実験で変更しない場合は前回値を継続）----
 if need_met
     met = input_met_conditions_();
     met.calib_a        = cfg.calib_a;
     met.calib_b        = cfg.calib_b;
     met.volt_offset_mV = cfg.volt_offset_mV;
     met.git_commit     = git_commit_hash_();   % コード版数（再現性記録用）
-    save_experiment_log_(log_path, date_str, met);
-    fprintf('[記録] 気象条件を保存しました\n\n');
 end
+% met（新規入力 or 前回継続）を、現在の実験フォルダのログに保存する
+save_experiment_log_(log_path, date_str, met);
+fprintf('[記録] 気象条件を保存しました\n\n');
 
 % ---- 迎角範囲・開始フェーズ ----
 if preset_start > 0
     start_idx = preset_start;   % 途中からやり直し: 迎角範囲は前回のまま、フェーズ固定
     fprintf('[再開] %s フェーズからやり直します（迎角範囲は前回設定を継続）。\n\n', all_phases{preset_start});
 else
-    max_angle = input_max_angle_();
+    [max_angle, angle_step, phase_enabled] = configure_angle_sweep_();
     start_idx = select_start_phase_();
 end
 
@@ -97,6 +102,13 @@ exp_control = '';   % 停止メニューの結果（''=正常完了 / restart_fu
 
 ph_idx = start_idx;
 while ph_idx <= n_phases
+
+    % 正負の選択で無効化されたフェーズ（例: 正のみ計測時の Mofst/Mdata）はスキップ
+    if ~phase_enabled(ph_idx)
+        fprintf('[スキップ] %s は計測対象外です。\n', all_phases{ph_idx});
+        ph_idx = ph_idx + 1;
+        continue;
+    end
 
     phase = all_phases{ph_idx};
     monitor.setPhase(phase);
@@ -127,7 +139,7 @@ while ph_idx <= n_phases
     confirm_blower_(phase);
 
     % ---- 計測ループ ----
-    pts     = build_measurement_sequence_(phase, max_angle);
+    pts     = build_measurement_sequence_(phase, max_angle, angle_step);
     n_total = numel(pts);
     fprintf('\n=== %s フェーズ開始 (%d 点) ===\n\n', phase, n_total);
 
@@ -327,7 +339,36 @@ end % while ph_idx
 % ===== 停止メニューの結果に応じて再入場 or 終了 =====
 switch exp_control
     case ''                  % 停止なし = 全フェーズ正常完了
-        break;               % 外側リスタートループを抜けて後処理へ
+        % --- 完了通知・後処理 ---
+        fprintf('=== 全フェーズ完了 ===\n');
+        fprintf('[保存先] %s\n\n', exp_dir);
+        notify_sound_(4);   % 全実験完了を音で通知
+        run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled);
+
+        % --- もう一度実験を行うか？ ---
+        ans_again = strtrim(input('もう一度実験を行いますか？ [y/N]: ', 's'));
+        if ~any(strcmpi(ans_again, {'y', 'yes'}))
+            fprintf('[終了] 実験を終了します。\n\n');
+            cleanup_devices_(stage, logger, s_volt, monitor);
+            return;
+        end
+
+        % --- 気温・気圧を変更するか？（しない場合は前回値を継続）---
+        ans_met  = strtrim(input('気温・気圧を変更しますか？ [y/N]: ', 's'));
+        need_met = any(strcmpi(ans_met, {'y', 'yes'}));
+
+        % --- 新しい実験フォルダを用意（前回データと混ざらないよう別フォルダ）---
+        exp_name = input_experiment_name_();
+        exp_dir  = fullfile(cfg.output_dir, exp_name);
+        data_dir = fullfile(exp_dir, 'data');
+        [~, ~]   = mkdir(data_dir);
+        t_start  = datetime('now');
+        date_str = sprintf('%04d%02d%02d', year(t_start), month(t_start), day(t_start));
+        log_path = fullfile(exp_dir, sprintf('%s_experiment_log.json', date_str));
+        fprintf('[準備] 新しい実験フォルダ: %s\n\n', exp_dir);
+
+        preset_start = 0;   % 最初のフェーズから
+        continue;           % 外側リスタートループの先頭へ
 
     case 'restart_full'      % 完全に最初から（気温・気圧から）
         need_met = true;  preset_start = 0;
@@ -351,16 +392,8 @@ switch exp_control
 end
 
 end % while true（実験リスタート制御ループ）
-
-% =====================================================================
-%  4. 実験完了・後処理
-% =====================================================================
-fprintf('=== 全フェーズ完了 ===\n');
-fprintf('[保存先] %s\n\n', exp_dir);
-notify_sound_(4);   % 全実験完了を音で通知（フェーズ完了より長め）
-
-cleanup_devices_(stage, logger, s_volt, monitor);
-run_postprocess_if_ready_(exp_dir, date_str, cfg);
+% ※ ループ完了・後処理・「もう一度実験するか」の確認は、上の switch の
+%   case '' 内で行う（正常完了時はそこで return される）。
 
 % =====================================================================
 %  ローカル関数
@@ -422,16 +455,20 @@ function confirm_blower_(phase)
     fprintf('\n');
 end
 
-function pts = build_measurement_sequence_(phase, max_angle)
+function pts = build_measurement_sequence_(phase, max_angle, angle_step)
     % 迎角シーケンスを生成する
     %
     % 返値: struct 配列。各要素のフィールド:
     %   target_angle : 実際に移動する角度 [度]
-    %   ref_angle    : ファイル名に使う参照迎角（0〜max_angle, 常に正）
+    %   ref_angle    : ファイル名に使う参照迎角（常に正の整数）
     %   suffix       : 0=0°基準計測, 1=目標迎角計測
     %
-    % Pフェーズ: 0° → 1° → 0° → 2° → 0° → ... → max_angle° → 0°
-    % Mフェーズ: 0° → -1° → 0° → -2° → 0° → ... → -max_angle° → 0°
+    % Pフェーズ: 0° → step° → 0° → 2*step° → 0° → ... → max_angle° → 0°
+    % Mフェーズ: 0° → -step° → 0° → -2*step° → 0° → ... → -max_angle° → 0°
+
+    if nargin < 3 || isempty(angle_step)
+        angle_step = 1;
+    end
 
     if startsWith(phase, 'P')
         angle_sign = +1;
@@ -439,15 +476,16 @@ function pts = build_measurement_sequence_(phase, max_angle)
         angle_sign = -1;
     end
 
-    n_pts = 1 + max_angle * 2;
+    angles = angle_step:angle_step:max_angle;   % step, 2*step, ..., ≤max_angle
+    n_pts  = 1 + numel(angles) * 2;
     pts(n_pts) = struct('target_angle', 0, 'ref_angle', 0, 'suffix', 0);
 
     pts(1) = struct('target_angle', 0, 'ref_angle', 0, 'suffix', 0);
 
     k = 2;
-    for n = 1:max_angle
-        pts(k)   = struct('target_angle', angle_sign * n, 'ref_angle', n, 'suffix', 1);
-        pts(k+1) = struct('target_angle', 0,              'ref_angle', n, 'suffix', 0);
+    for a = angles
+        pts(k)   = struct('target_angle', angle_sign * a, 'ref_angle', a, 'suffix', 1);
+        pts(k+1) = struct('target_angle', 0,              'ref_angle', a, 'suffix', 0);
         k = k + 2;
     end
 end
@@ -656,6 +694,58 @@ function max_angle = input_max_angle_()
     fprintf('→ 最大迎角 %d°（%d 点/フェーズ）\n\n', max_angle, 1 + max_angle * 2);
 end
 
+function [max_angle, angle_step, phase_enabled] = configure_angle_sweep_()
+    % 迎角スイープの設定を対話で決める。
+    %   max_angle     : 最大迎角 [度]
+    %   angle_step    : 刻み幅 [度]
+    %   phase_enabled : [Pofst Mofst Pdata Mdata] の論理ベクトル（正負の選択）
+    fprintf('\n=== 迎角スイープの設定 ===\n');
+    ans_def = strtrim(input('デフォルト（±30°・1°刻み・正負両方）で計測しますか？ [Y/n]: ', 's'));
+    if isempty(ans_def) || any(strcmpi(ans_def, {'y', 'yes'}))
+        max_angle     = 30;
+        angle_step    = 1;
+        phase_enabled = [true true true true];
+        fprintf('→ ±30°・1°刻み・正負両方で計測します。\n\n');
+        return
+    end
+
+    % --- (1) 正負の選択 ---
+    fprintf('\n計測する迎角の符号を選んでください:\n');
+    fprintf('  1: 正負どちらも\n');
+    fprintf('  2: 正のみ（0 〜 +max）\n');
+    fprintf('  3: 負のみ（0 〜 −max）\n');
+    sgn = ask_int_('選択 [1-3]: ', 1, 3);
+    switch sgn
+        case 1, phase_enabled = [true  true  true  true];   % 全フェーズ
+        case 2, phase_enabled = [true  false true  false];  % 正のみ(Pofst,Pdata)
+        case 3, phase_enabled = [false true  false true];   % 負のみ(Mofst,Mdata)
+    end
+
+    % --- (2) 最大迎角 ---
+    max_angle = ask_int_('迎角は最大何度まで計測しますか？ [整数, 1-30]: ', 1, 30);
+
+    % --- (3) 刻み幅 ---
+    angle_step = ask_int_('迎角の刻み幅は何度ですか？ [整数, 1-max]: ', 1, max_angle);
+
+    sgn_lbl = {'正負両方', '正のみ', '負のみ'};
+    n_each  = numel(angle_step:angle_step:max_angle);
+    fprintf('→ %s・最大%d°・%d°刻み（%d 点/フェーズ）で計測します。\n\n', ...
+            sgn_lbl{sgn}, max_angle, angle_step, 1 + n_each * 2);
+end
+
+function v = ask_int_(prompt, lo, hi)
+    % lo〜hi の整数を対話で取得する（範囲外・非整数・空入力は再入力）
+    while true
+        val = input(prompt);
+        if isnumeric(val) && isscalar(val) && ~isempty(val) && ...
+                val == floor(val) && val >= lo && val <= hi
+            v = val;
+            return
+        end
+        fprintf('  ※ %d〜%d の整数を入力してください。\n', lo, hi);
+    end
+end
+
 function idx = select_start_phase_()
     fprintf('=== 開始フェーズの選択 ===\n');
     fprintf('  通常は 1 を選択。エラー中断後の再開は対象フェーズ番号を入力してください。\n\n');
@@ -792,14 +882,19 @@ function delete_phase_data_(data_dir, date_str, phase)
     end
 end
 
-function run_postprocess_if_ready_(exp_dir, date_str, cfg)
+function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
     % 全4フェーズの volt_summary が揃っていれば後処理を実行する
     %   Step 0: post_process/venv が未作成なら 64bit Python で作成・パッケージインストール
     %   Step 1: make_windspeed.py → windspeed.csv
     %   Step 2: calc_force.py    → 空力係数 CSV・グラフ PNG
 
+    % 計測したフェーズの volt_summary が揃っていれば後処理を実行する。
+    % 片側のみの計測（正のみ／負のみ）では、計測していないフェーズは要求しない。
     phases = {'Pofst', 'Mofst', 'Pdata', 'Mdata'};
     for i = 1:numel(phases)
+        if nargin >= 4 && ~phase_enabled(i)
+            continue;   % このフェーズは計測対象外 → 要求しない
+        end
         fname = make_filename(date_str, '', phases{i}, 0, 0, 'volt_summary');
         if ~isfile(fullfile(exp_dir, fname))
             fprintf('[後処理] %s がまだありません → 後処理をスキップ\n\n', fname);
