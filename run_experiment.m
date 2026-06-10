@@ -286,6 +286,20 @@ while ph_idx <= n_phases
             logger.waitForFinish();
             logger.getResult(); %#ok<NASGU>
 
+            % ------ f2. 計測量の妥当性チェック ------
+            % Python プロセスが計測途中で死んだ場合（USB瞬断など）、isDone は
+            % プロセス終了側の条件で true になるため、データ不足のまま「成功」
+            % 扱いになってしまう。目標サイズに大きく満たなければエラーにして
+            % エラーメニュー（再試行/スキップ等）へ回す。
+            % （再試行時は失敗点の部分ファイルが自動削除される）
+            sz_kb = logger.getSizeKB();
+            if sz_kb < 0.8 * cfg.force_sensor_size_limit_kb
+                error(['[計測量不足] 6軸センサCSVが %.1f KB しかありません（目標 %.0f KB）。\n' ...
+                       '  計測途中でセンサプロセスが終了した可能性があります。\n' ...
+                       '  USB接続・センサ電源を確認してください。'], ...
+                      sz_kb, cfg.force_sensor_size_limit_kb);
+            end
+
             avg_mv = NaN;
             if ~isempty(voltages), avg_mv = mean(voltages); end
 
