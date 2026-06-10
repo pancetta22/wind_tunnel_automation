@@ -97,7 +97,7 @@ Windy/
 ├── setup_paths.m               # 診断ツール等を単体で使う前に実行（パス追加）
 ├── config.json.example         # 設定ファイルのテンプレート
 ├── config.json                 # 各自の設定（Git管理外）
-├── README.md / SPEC.md / Windy.prj
+├── README.md / SPEC.md
 │
 ├── measurement_control/        # run_experiment が使う計測機器ヘルパ
 │   ├── QT_ADL1.m               #   迎角ステージ ドライバクラス

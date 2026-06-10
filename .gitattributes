@@ -24,5 +24,6 @@
 *.exe binary
 *.jpg binary
 *.pdf binary
+*.pptx binary
 *.png binary
 *.xlsx binary

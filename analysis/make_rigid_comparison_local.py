@@ -64,7 +64,7 @@ DATASETS = {
                      "color": "#E74C3C", "marker": "P",  "date": "2026-06-05", "who": "new_fault"},
     "260608":       {"path": os.path.join(BASE, "force_measurement_260608_rigid/C_aero.csv"),
                      "color": "#E67E22", "marker": "p",  "date": "2026-06-08", "who": "new_fault"},
-    "260610①":     {"path": os.path.join(BASE, "force_meausrement_260610_rigid/C_aero.csv"),
+    "260610①":     {"path": os.path.join(BASE, "force_measurement_260610_rigid/C_aero.csv"),
                      "color": "#F39C12", "marker": "d",  "date": "2026-06-10", "who": "new_fault"},
     "rigid3\n修正後": {"path": os.path.join(BASE, "force_measurement_260610_rigid3/C_aero.csv"),
                      "color": "#1E8449", "marker": "*",  "date": "2026-06-10", "who": "fixed"},
@@ -115,7 +115,10 @@ NOTE_STR = {
 }
 
 # 除外データ（aero_data には残すが図・表には載せない）
-EXCLUDE_DIRS = {"force_measurement_260417"}
+EXCLUDE_DIRS = {
+    "force_measurement_260417",
+    "force_meausrement_260610_rigid",   # typo名（修正済み 260610_rigid と同内容の再同期を防ぐ）
+}
 
 # ─── aero_data 内の未登録フォルダを自動追加 ──────────────────────────────────────
 #  今後 update_aero_data.py で aero_data/ に新しい rigid 実験の C_aero.csv が
