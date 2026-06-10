@@ -55,26 +55,45 @@ monitor.setDataSource(@() logger.getRecentRows(600));   % 6軸グラフ: 直近 
 t_start  = datetime('now');
 date_str = sprintf('%04d%02d%02d', year(t_start), month(t_start), day(t_start));
 
-% 気象条件（1回のみ入力）
-met = input_met_conditions_();
-met.calib_a        = cfg.calib_a;
-met.calib_b        = cfg.calib_b;
-met.volt_offset_mV = cfg.volt_offset_mV;
-met.git_commit     = git_commit_hash_();   % コード版数（VSCode等で確認できるコミットハッシュ・再現性記録用）
-
+% 実験ログのパス
 log_path = fullfile(exp_dir, sprintf('%s_experiment_log.json', date_str));
-save_experiment_log_(log_path, date_str, met);
-fprintf('[記録] 気象条件を保存しました\n\n');
-
-% 迎角範囲・開始フェーズ
-max_angle = input_max_angle_();
-start_idx = select_start_phase_();
 
 % =====================================================================
 %  3. 全フェーズ 連続計測
 % =====================================================================
 all_phases = {'Pofst', 'Mofst', 'Pdata', 'Mdata'};
 n_phases   = numel(all_phases);
+
+% ---- 実験リスタート制御ループ ----
+%  停止ボタンのメニュー(ask_stop_action_)で、このループ先頭に戻って再入場できる:
+%    完全に最初から    → need_met=true（気温・気圧の入力から）
+%    気温気圧の後から  → need_met=false（迎角範囲・開始フェーズの選択から）
+%    計測を途中から    → need_met=false かつ preset_start を選択フェーズに設定
+need_met     = true;   % 気温・気圧を入力するか
+preset_start = 0;      % >0 なら開始フェーズを固定（途中からやり直し用。迎角範囲は引き継ぐ）
+while true
+
+% ---- 気象条件（必要時のみ入力）----
+if need_met
+    met = input_met_conditions_();
+    met.calib_a        = cfg.calib_a;
+    met.calib_b        = cfg.calib_b;
+    met.volt_offset_mV = cfg.volt_offset_mV;
+    met.git_commit     = git_commit_hash_();   % コード版数（再現性記録用）
+    save_experiment_log_(log_path, date_str, met);
+    fprintf('[記録] 気象条件を保存しました\n\n');
+end
+
+% ---- 迎角範囲・開始フェーズ ----
+if preset_start > 0
+    start_idx = preset_start;   % 途中からやり直し: 迎角範囲は前回のまま、フェーズ固定
+    fprintf('[再開] %s フェーズからやり直します（迎角範囲は前回設定を継続）。\n\n', all_phases{preset_start});
+else
+    max_angle = input_max_angle_();
+    start_idx = select_start_phase_();
+end
+
+exp_control = '';   % 停止メニューの結果（''=正常完了 / restart_full / restart_after_met / restart_goto / quit）
 
 ph_idx = start_idx;
 while ph_idx <= n_phases
@@ -133,14 +152,11 @@ while ph_idx <= n_phases
         end
 
         % ------ 停止チェック（一時停止を経由しなくても確実に検出）------
-        %  停止ボタンは paused_ を false に戻すため、上の isPaused ゲートだけ
-        %  では計測中に押された停止を取りこぼす。pause_action_ を直接見て判定し、
-        %  デバイスを後始末してから終了する（ポート開きっぱなしを防ぐ）。
+        %  停止ボタンは paused_ を false に戻すため、isPaused ゲートだけでは
+        %  計測中の停止を取りこぼす。pause_action_ を直接見て判定し、メニューへ。
         if monitor.isStopRequested()
-            fprintf('[停止] 手動停止が選択されました。実験を終了します。\n\n');
-            try; stage.moveToAngle(0); catch; end
-            cleanup_devices_(stage, logger, s_volt, monitor);
-            return;
+            exp_control = handle_stop_(stage, logger, s_volt, monitor);
+            break;   % 計測点ループを抜ける → 下でフェーズループも抜け、外側で分岐
         end
 
         try
@@ -212,13 +228,10 @@ while ph_idx <= n_phases
             voltages = voltages(1:nv);
             fprintf('\n');
 
-            % ------ 計測中に停止が押された場合：この点は保存せず終了 ------
+            % ------ 計測中に停止が押された場合：この点は保存せずメニューへ ------
             if monitor.isStopRequested()
-                fprintf('[停止] 計測を中断しました。実験を終了します。\n\n');
-                try; logger.stop();          catch; end
-                try; stage.moveToAngle(0);   catch; end
-                cleanup_devices_(stage, logger, s_volt, monitor);
-                return;
+                exp_control = handle_stop_(stage, logger, s_volt, monitor);
+                break;   % 計測点ループを抜ける
             end
 
             % ------ f. 6軸センサの完全終了を待つ ------
@@ -280,10 +293,16 @@ while ph_idx <= n_phases
 
     end % while idx
 
+    % 停止メニューが選ばれた場合はフェーズループも抜けて、外側で分岐する
+    if ~isempty(exp_control)
+        break;
+    end
+
     % ---- フェーズ終了後の処理 ----
     switch phase_action
         case 'next'
             fprintf('=== %s フェーズ完了 ===\n\n', phase);
+            notify_sound_(2);   % フェーズ完了を音で実験者に通知
             try; stage.moveToAngle(0); catch; end
             ph_idx = ph_idx + 1;
 
@@ -305,11 +324,40 @@ while ph_idx <= n_phases
 
 end % while ph_idx
 
+% ===== 停止メニューの結果に応じて再入場 or 終了 =====
+switch exp_control
+    case ''                  % 停止なし = 全フェーズ正常完了
+        break;               % 外側リスタートループを抜けて後処理へ
+
+    case 'restart_full'      % 完全に最初から（気温・気圧から）
+        need_met = true;  preset_start = 0;
+        fprintf('[再起動] 完全に最初からやり直します。\n\n');
+        continue;
+
+    case 'restart_after_met' % 気温・気圧の後から（迎角範囲・開始フェーズの選択から）
+        need_met = false; preset_start = 0;
+        fprintf('[再起動] 迎角範囲・開始フェーズの選択からやり直します。\n\n');
+        continue;
+
+    case 'restart_goto'      % 計測を途中から（フェーズを選択）
+        need_met = false; preset_start = ask_goto_phase_();
+        continue;
+
+    case 'quit'              % 実験を終了
+        fprintf('[中止] 実験を終了します。\n\n');
+        try; stage.moveToAngle(0); catch; end
+        cleanup_devices_(stage, logger, s_volt, monitor);
+        return;
+end
+
+end % while true（実験リスタート制御ループ）
+
 % =====================================================================
 %  4. 実験完了・後処理
 % =====================================================================
 fprintf('=== 全フェーズ完了 ===\n');
 fprintf('[保存先] %s\n\n', exp_dir);
+notify_sound_(4);   % 全実験完了を音で通知（フェーズ完了より長め）
 
 cleanup_devices_(stage, logger, s_volt, monitor);
 run_postprocess_if_ready_(exp_dir, date_str, cfg);
@@ -671,6 +719,66 @@ function ph = ask_goto_phase_()
     end
     phases = {'Pofst', 'Mofst', 'Pdata', 'Mdata'};
     fprintf('→ [%s] からやり直します。\n\n', phases{ph});
+end
+
+function action = ask_stop_action_()
+    % 停止ボタン押下時にユーザーへ次の動作を確認する（ask_error_action_ と同スタイル）
+    fprintf('\n');
+    fprintf('════════════════════════════════════════\n');
+    fprintf('  [停止] 計測を停止しました\n');
+    fprintf('════════════════════════════════════════\n\n');
+    fprintf('どうしますか？\n');
+    fprintf('  F: 完全に最初からやり直す（気温・気圧の入力から）\n');
+    fprintf('  A: 気温・気圧の後からやり直す（迎角範囲・開始フェーズの選択から）\n');
+    fprintf('  M: 計測を途中からやり直す（やり直すフェーズを選択）\n');
+    fprintf('  Q: 実験を終了する\n\n');
+
+    valid = {'F','A','M','Q'};
+    while true
+        choice = upper(strtrim(input('選択 [F/A/M/Q]: ', 's')));
+        if ismember(choice, valid), break; end
+        fprintf('  ※ F, A, M, Q のいずれかを入力してください。\n');
+    end
+    fprintf('\n');
+
+    switch choice
+        case 'F'; action = 'restart_full';
+        case 'A'; action = 'restart_after_met';
+        case 'M'; action = 'restart_goto';
+        case 'Q'; action = 'quit';
+    end
+end
+
+function action = handle_stop_(stage, logger, s_volt, monitor) %#ok<INUSD>
+    % 停止検出時の共通処理:
+    %   1. 進行中の6軸記録を中断
+    %   2. 翼を 0° へ戻す
+    %   3. モニタの停止状態をリセット（再開できるように）
+    %   4. メニューを表示して次の動作を返す
+    try; logger.stop(); catch; end
+    fprintf('\n[停止] 計測を停止しています...\n');
+    try; stage.moveToAngle(0); catch; end
+    monitor.resetControl();
+    action = ask_stop_action_();
+end
+
+function notify_sound_(n_tones)
+    % 通知音を鳴らす（n_tones 個の上昇音）。
+    % 音声デバイスが無い環境でも実験は止めないよう try/catch で保護する。
+    if nargin < 1, n_tones = 2; end
+    try
+        Fs    = 8000;
+        t     = 0:1/Fs:0.16;                 % 1音あたり約0.16秒
+        env   = linspace(1, 0, numel(t));    % 簡易フェードアウト（プチノイズ抑制）
+        freqs = [784, 988, 1175, 1568];      % G5, B5, D6, G6（上昇する明るい音）
+        y = [];
+        for k = 1:min(n_tones, numel(freqs))
+            y = [y, sin(2*pi*freqs(k)*t) .* env]; %#ok<AGROW>
+        end
+        sound(y * 0.3, Fs);   % 音量30%
+    catch
+        try; beep; catch; end   % フォールバック（システムビープ）
+    end
 end
 
 function delete_phase_data_(data_dir, date_str, phase)

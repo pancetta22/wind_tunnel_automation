@@ -214,6 +214,26 @@ classdef WindyMonitor < handle
         end
 
         % ============================================================
+        %  一時停止／停止の状態をリセット（実験リスタート時に呼ぶ）
+        %  停止後に再開できるよう、フラグと操作ボタン表示を初期状態へ戻す。
+        % ============================================================
+        function resetControl(obj)
+            if ~obj.is_open_(), return; end
+            obj.paused_       = false;
+            obj.pause_action_ = '';
+            if ~isempty(obj.btn_resume_) && isvalid(obj.btn_resume_)
+                obj.btn_resume_.Visible = 'off';
+            end
+            if ~isempty(obj.btn_stop_) && isvalid(obj.btn_stop_)
+                obj.btn_stop_.Visible = 'off';
+            end
+            if ~isempty(obj.btn_pause_) && isvalid(obj.btn_pause_)
+                obj.btn_pause_.Visible = 'on';
+            end
+            drawnow;
+        end
+
+        % ============================================================
         %  フェーズ名更新
         % ============================================================
         function setPhase(obj, phase)
