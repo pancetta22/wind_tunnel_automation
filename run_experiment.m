@@ -60,6 +60,7 @@ met = input_met_conditions_();
 met.calib_a        = cfg.calib_a;
 met.calib_b        = cfg.calib_b;
 met.volt_offset_mV = cfg.volt_offset_mV;
+met.git_commit     = git_commit_hash_();   % コード版数（VSCode等で確認できるコミットハッシュ・再現性記録用）
 
 log_path = fullfile(exp_dir, sprintf('%s_experiment_log.json', date_str));
 save_experiment_log_(log_path, date_str, met);
@@ -499,7 +500,8 @@ function save_experiment_log_(filepath, date_str, met)
         'water_density',  met.water_density,   ...
         'volt_offset_mV', met.volt_offset_mV,  ...
         'calib_a',        met.calib_a,         ...
-        'calib_b',        met.calib_b          ...
+        'calib_b',        met.calib_b,         ...
+        'git_commit',     git_commit_field_(met) ...
     );
 
     fid = fopen(filepath, 'w', 'n', 'UTF-8');
@@ -509,6 +511,39 @@ function save_experiment_log_(filepath, date_str, met)
     end
     fprintf(fid, '%s\n', jsonencode(log));
     fclose(fid);
+end
+
+% ---------------------------------------------------------------------
+%  リポジトリの現在のコミットハッシュを取得（再現性記録用）
+%  - 未コミットの変更がある場合は末尾に "-dirty" を付ける
+%  - git が無い／リポジトリ外の場合は 'unknown' を返す
+% ---------------------------------------------------------------------
+function h = git_commit_hash_()
+    h = 'unknown';
+    repo_dir = fileparts(mfilename('fullpath'));
+    try
+        [st, out] = system(sprintf('git -C "%s" rev-parse HEAD', repo_dir));
+        if st == 0 && ~isempty(strtrim(out))
+            h = strtrim(out);
+            [st2, dirty] = system(sprintf('git -C "%s" status --porcelain', repo_dir));
+            if st2 == 0 && ~isempty(strtrim(dirty))
+                h = [h '-dirty'];   % 未コミットの変更あり
+            end
+        end
+    catch
+        % git 未導入等 → 'unknown' のまま
+    end
+end
+
+% ---------------------------------------------------------------------
+%  met から git_commit を安全に取り出す（未設定なら取得を試みる）
+% ---------------------------------------------------------------------
+function h = git_commit_field_(met)
+    if isfield(met, 'git_commit') && ~isempty(met.git_commit)
+        h = met.git_commit;
+    else
+        h = git_commit_hash_();
+    end
 end
 
 function offset_mV = measure_volt_offset_(s_volt)
