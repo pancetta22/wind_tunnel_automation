@@ -147,7 +147,7 @@ while ph_idx <= n_phases
     % 古い計測CSVが残っていると、calc_force が同一点を二重に読んで結果が汚染される。
     % どの経路から入ってもクリーンに始まるよう、このフェーズの既存ファイルを毎回掃除する
     % （初回は対象が無く何もしない）。
-    delete_phase_data_(data_dir, date_str, phase);
+    delete_phase_data_(data_dir, phase);
     summary_fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
     summary_path  = fullfile(exp_dir, summary_fname);
     init_volt_summary_(summary_path);
@@ -1013,16 +1013,27 @@ function notify_sound_(n_tones)
     end
 end
 
-function delete_phase_data_(data_dir, date_str, phase)
-    % フェーズ開始前に、そのフェーズの既存データを data/ から削除する。
-    % エラー/停止からの再入場・同フォルダ再計測で古いCSVが残っていると
-    % calc_force が同一点を二重に読んで結果が汚染されるため。
-    yy_date = date_str(3:end);
-    files = dir(fullfile(data_dir, sprintf('%s_*_%s_%s_*', date_str, yy_date, phase)));
-    if isempty(files), return; end
-    fprintf('[削除] %s フェーズの古いデータ %d ファイルを削除します...\n\n', phase, numel(files));
+function delete_phase_data_(data_dir, phase)
+    % フェーズ開始前に、そのフェーズの既存データCSVを data/ から削除する。
+    % エラー/停止からの再入場・同フォルダ再計測で古いCSVが残っていると、
+    % calc_force が同一計測点を二重に読んで結果が汚染されるため。
+    %
+    % 日付プレフィックスではなくフェーズ名トークン（例: '_Pofst_'）で照合する:
+    %   ・日付で照合すると、フォルダを別日に再利用した場合に取りこぼす
+    %   ・Windows の複数ワイルドカード dir の挙動にも依存しない
+    % 6軸CSV・volt_raw CSV はどちらも '_<phase>_' を名前に含む。
+    if ~isfolder(data_dir), return; end
+    files = dir(fullfile(data_dir, '*.csv'));
+    token = ['_' phase '_'];
+    n = 0;
     for i = 1:numel(files)
-        delete(fullfile(files(i).folder, files(i).name));
+        if contains(files(i).name, token)
+            delete(fullfile(files(i).folder, files(i).name));
+            n = n + 1;
+        end
+    end
+    if n > 0
+        fprintf('[削除] %s フェーズの古いデータ %d ファイルを削除しました。\n\n', phase, n);
     end
 end
 
