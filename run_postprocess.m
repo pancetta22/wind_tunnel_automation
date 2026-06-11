@@ -85,7 +85,7 @@ prompt_origin_pulse_update_(exp_dir, fullfile(root, 'config.json'));
 % --- Step 3: 過去データとの比較（rigid 実験のみ・確認の上で実行）-----------
 [~, exp_name] = fileparts(exp_dir);
 if contains(lower(exp_name), 'rigid')
-    ans_cmp = input('過去データと比較しますか？ [y/N]: ', 's');
+    ans_cmp = input('過去データと比較しますか？ [y/n]: ', 's');
     if any(strcmpi(strtrim(ans_cmp), {'y', 'yes'}))
         updater = fullfile(root, 'analysis', 'update_aero_data.py');
         if ~isfile(updater)
@@ -152,7 +152,7 @@ function prompt_origin_pulse_update_(exp_dir, config_path)
         return
     end
 
-    ans_up = strtrim(input('  ゼロ揚力角の設定（origin_pulse）をこの推奨値に修正しますか？ [y/N]: ', 's'));
+    ans_up = strtrim(input('  ゼロ揚力角の設定（origin_pulse）をこの推奨値に修正しますか？ [y/n]: ', 's'));
     if ~any(strcmpi(ans_up, {'y', 'yes'}))
         fprintf('  → 修正しませんでした（origin_pulse = %d のまま）。\n\n', cfg_origin);
         return

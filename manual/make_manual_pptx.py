@@ -430,7 +430,7 @@ add_text(slide,
          "  現在の原点パルス  : 11025 pulse\n"
          "  推奨の原点パルス  : 10832 pulse  (補正 +193 pulse)\n"
          "  ゼロ揚力角の設定(origin_pulse)を\n"
-         "  この推奨値に修正しますか？ [y/N]:",
+         "  この推奨値に修正しますか？ [y/n]:",
          Inches(1.1), Inches(3.35), Inches(7.0), Inches(2.1),
          font_size=Pt(12.5), color=RGBColor(0x7F, 0xD9, 0x7F))
 

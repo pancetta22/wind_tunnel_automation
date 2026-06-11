@@ -400,7 +400,7 @@ switch exp_control
         run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled);
 
         % --- もう一度実験を行うか？ ---
-        ans_again = strtrim(input('もう一度実験を行いますか？ [y/N]: ', 's'));
+        ans_again = strtrim(input('もう一度実験を行いますか？ [y/n]: ', 's'));
         if ~any(strcmpi(ans_again, {'y', 'yes'}))
             fprintf('[終了] 実験を終了します。\n\n');
             cleanup_devices_(stage, logger, s_volt, monitor);
@@ -408,7 +408,7 @@ switch exp_control
         end
 
         % --- 気温・気圧を変更するか？（しない場合は前回値を継続）---
-        ans_met  = strtrim(input('気温・気圧を変更しますか？ [y/N]: ', 's'));
+        ans_met  = strtrim(input('気温・気圧を変更しますか？ [y/n]: ', 's'));
         need_met = any(strcmpi(ans_met, {'y', 'yes'}));
 
         % --- 新しい実験フォルダを用意（前回データと混ざらないよう別フォルダ）---
@@ -792,7 +792,7 @@ function name = input_experiment_name_(output_dir)
                 fprintf('  ※ フォルダ [%s] には既に計測データがあります（%d ファイル）。\n', ...
                         name, numel(old_csv));
                 fprintf('     同じフォルダに追加すると前回のデータと混ざり、結果が汚染されます。\n');
-                ans_ow = strtrim(input('     それでもこのフォルダを使いますか？ [y/N]: ', 's'));
+                ans_ow = strtrim(input('     それでもこのフォルダを使いますか？ [y/n]: ', 's'));
                 if ~any(strcmpi(ans_ow, {'y', 'yes'}))
                     continue;   % 別名を入力し直す
                 end
@@ -809,7 +809,7 @@ function [max_angle, angle_step, phase_enabled] = configure_angle_sweep_()
     %   angle_step    : 刻み幅 [度]
     %   phase_enabled : [Pofst Mofst Pdata Mdata] の論理ベクトル（正負の選択）
     fprintf('\n=== 迎角スイープの設定 ===\n');
-    ans_def = strtrim(input('デフォルト（±30°・1°刻み・正負両方）で計測しますか？ [Y/n]: ', 's'));
+    ans_def = strtrim(input('デフォルト（±30°・1°刻み・正負両方）で計測しますか？ [y/n]: ', 's'));
     if isempty(ans_def) || any(strcmpi(ans_def, {'y', 'yes'}))
         max_angle     = 30;
         angle_step    = 1;
