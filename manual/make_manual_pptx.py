@@ -178,13 +178,14 @@ tree = [
     ("├ run_postprocess.m  ← 後処理だけ再実行", C_GREEN, True, Pt(12.5)),
     ("├ setup_paths.m      ← 診断ツール用パス", C_GREEN, True, Pt(12.5)),
     ("├ config.json(.example)  設定ファイル",   C_TEXT,  False, Pt(12.5)),
-    ("├ README.md / SPEC.md",                  C_TEXT,  False, Pt(12.5)),
+    ("├ README.md / MANUAL.md / SPEC.md",      C_TEXT,  False, Pt(12.5)),
     ("│",                            C_GRAYTXT,  False, Pt(12.5)),
     ("├ measurement_control/  計測機器の制御", C_MID_BLUE, True, Pt(12.5)),
     ("├ diagnostics/          点検・診断ツール", C_MID_BLUE, True, Pt(12.5)),
     ("├ leptrino/             6軸センサ通信",   C_MID_BLUE, True, Pt(12.5)),
     ("├ post_process/         後処理（Python）", C_MID_BLUE, True, Pt(12.5)),
-    ("└ post_process/         後処理（Python）", C_MID_BLUE, True, Pt(12.5)),
+    ("├ analysis/             結果の比較・分析", C_MID_BLUE, True, Pt(12.5)),
+    ("└ manual/               このマニュアル",  C_MID_BLUE, True, Pt(12.5)),
 ]
 for i, (txt, col, bd, sz) in enumerate(tree):
     add_text(slide, txt, Inches(0.65), Inches(1.3) + i * Inches(0.42),
@@ -201,7 +202,8 @@ groups = [
       "measurement_control / diagnostics / leptrino"]),
     ("🟣 後処理・分析", C_PURPLE, RGBColor(0xEE, 0xE7, 0xF6),
      ["空力係数の算出と過去データとの比較。",
-      "post_process /（analysis・manual は WindyData 内）"]),
+      "post_process / analysis / manual",
+      "※生成される pptx は output_dir に保存"]),
 ]
 gy = Inches(1.25)
 for label, col, bg, lines in groups:
@@ -222,10 +224,11 @@ rows = [
     ("config.json",       "各自の環境設定（COMポート・Pythonパス・保存先）※Git管理外"),
     ("config.json.example","設定の雛形。コピーして config.json を作る"),
     ("README.md",         "クイックスタート・構成・使い方の説明書"),
+    ("MANUAL.md",         "操作マニュアル（このパワポと同内容の Markdown 版）"),
     ("SPEC.md",           "設計仕様書（実装の経緯・歴史的資料）"),
 ]
 file_table(slide, rows, Inches(0.4), Inches(1.25), Inches(12.53), Inches(3.9),
-           C_GREEN, row_h=Inches(0.66))
+           C_GREEN, row_h=Inches(0.58))
 
 note_bar(slide, "💡 最短の使い方",
          ["① config.json.example をコピーして config.json を作り、COMポート等を設定（初回のみ）",
@@ -339,7 +342,7 @@ tag_box(slide, "🟣 rigid 実験で自動更新", Inches(10.3), Inches(0.25), C
 rows = [
     ("update_aero_data.py",            "新実験の C_aero.csv を取り込み→比較パワポ再生成（これ1つでOK）"),
     ("make_rigid_comparison_local.py", "比較パワポを生成する本体スクリプト"),
-    ("Windy新システムによる実験結果.pptx", "比較パワポ（成果物）。実験追加で自動更新される"),
+    ("Windy新システムによる実験結果.pptx", "比較パワポ（成果物）。output_dir に出力・実験追加で自動更新"),
     ("研究室MTGテンプレート.pptx",      "パワポの雛形（研究室フォーマット）"),
     ("aero_data/",                     "各実験の空力係数データ C_aero.csv の置き場"),
     ("archive/",                       "使い終わった単発スクリプト・旧パワポ・グラフ"),
@@ -363,7 +366,7 @@ flow = [
     ("run_experiment.m", "MATLAB で実行\n4フェーズを自動計測", C_GREEN_LIGHT, C_GREEN),
     ("実験フォルダ", "output_dir/<実験名>/\ndata/・volt_summary・log", C_GRAY_BG, C_MID_BLUE),
     ("post_process", "windspeed.csv\nC_aero.csv・グラフPNG", C_PROG_BG, C_MID_BLUE),
-    ("WindyData/\nanalysis", "比較パワポを更新\n（rigid 実験のみ）", RGBColor(0xEE, 0xE7, 0xF6), C_PURPLE),
+    ("analysis", "比較パワポを output_dir へ\n（rigid 実験のみ）", RGBColor(0xEE, 0xE7, 0xF6), C_PURPLE),
 ]
 bw, bh, gap = Inches(2.7), Inches(1.85), Inches(0.55)
 total = len(flow) * bw + (len(flow) - 1) * gap

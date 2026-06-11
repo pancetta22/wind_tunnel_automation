@@ -168,8 +168,8 @@ output_dir/<実験名>/
     ├ C_aero.csv                 空力係数
     └ *.png                      グラフ
     │
-    ▼  WindyData/analysis/  （rigid 実験のみ）
-    └ Windy新システムによる実験結果.pptx  ← 自動更新
+    ▼  analysis/  （rigid 実験のみ）
+    └ output_dir/Windy新システムによる実験結果.pptx  ← 自動更新
 ```
 
 ---

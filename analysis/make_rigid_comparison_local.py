@@ -169,9 +169,17 @@ if os.path.isdir(BASE):
                             "color":  _auto_palette[_ai % len(_auto_palette)],
                             "marker": _auto_markers[_ai % len(_auto_markers)],
                             "date":   _date, "who": "new"}
-        # フォルダ名 → 表示名（数字のみ。typo 綴り force_meausrement_ も吸収）
-        _disp = (_sub.replace("force_measurement_", "").replace("force_meausrement_", "")
-                     .replace("_rigid", ""))
+        # フォルダ名 → 表示名（数字のみ。typo 綴り force_meausrement_ も吸収。
+        #   末尾の "_rigid" は除去し、"_rigid2" 等の連番は ②③… に変換して
+        #   同日複数回の実験を区別する。例: 260611_rigid2 → 260611②）
+        _disp = (_sub.replace("force_measurement_", "")
+                     .replace("force_meausrement_", ""))
+        _mn = _re.search(r"_rigid(\d+)$", _disp)
+        if _mn:
+            _n = int(_mn.group(1))
+            _disp = _disp[:_mn.start()] + (chr(0x245F + _n) if 1 <= _n <= 20 else f"_{_n}")
+        else:
+            _disp = _re.sub(r"_rigid$", "", _disp)
         DISP_NAMES[_sub] = _disp
         ROW_INFO.append((_disp, "new"))
         _ai += 1
