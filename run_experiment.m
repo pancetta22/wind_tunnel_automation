@@ -153,9 +153,15 @@ while ph_idx <= n_phases
     init_volt_summary_(summary_path);
     fprintf('[準備] デジボルサマリー: %s\n\n', summary_fname);
 
-    % ---- 差圧センサ電圧オフセット自動計測（Pofst の前に1回だけ）----
+    % ---- ブロワー状態の確認 ----
+    confirm_blower_(phase);
+
+    % ---- 差圧センサ電圧オフセット自動計測（Pofst で1回だけ）----
+    %  連続実験では前回 Mdata の通風が残っていることがあるため、必ず
+    %  confirm_blower_（停止確認）の後にオフセットを取り直す。さらに
+    %  平均絶対値が大きい（通風中の疑い）場合は再計測できるようにする。
     if strcmp(phase, 'Pofst')
-        measured_offset = measure_volt_offset_(s_volt);
+        measured_offset = measure_volt_offset_checked_(s_volt);
         if ~isnan(measured_offset)
             met.volt_offset_mV = measured_offset;
             save_experiment_log_(log_path, date_str, met);
@@ -164,9 +170,6 @@ while ph_idx <= n_phases
             fprintf('[警告] オフセット計測失敗 — config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
         end
     end
-
-    % ---- ブロワー状態の確認 ----
-    confirm_blower_(phase);
 
     % ---- 計測ループ ----
     pts     = build_measurement_sequence_(phase, max_angle, angle_step);
@@ -771,6 +774,32 @@ function offset_mV = measure_volt_offset_(s_volt)
 
     offset_mV = mean(samples(1:n));
     fprintf('  → 電圧オフセット = %+.4f mV  (%d サンプル)\n\n', offset_mV, n);
+end
+
+function offset_mV = measure_volt_offset_checked_(s_volt)
+    % デジボル電圧オフセットを計測する。平均絶対値が大きい場合（通風中の値が
+    % 入った疑い）は、ブロワー停止を再確認して再計測できるようにする。
+    %  連続実験で前回の通風が残ったままオフセットを取ってしまう事故への保険。
+    OFFSET_ABS_LIMIT = 10;   % |オフセット| がこの mV 以上なら再計測を促す
+    while true
+        offset_mV = measure_volt_offset_(s_volt);
+        if isnan(offset_mV)
+            return;   % 計測失敗 → 呼び出し側で config 値にフォールバック
+        end
+        if abs(offset_mV) < OFFSET_ABS_LIMIT
+            return;   % 妥当な範囲
+        end
+        fprintf('[警告] オフセットの平均絶対値が大きいです: %.2f mV（しきい値 %d mV）。\n', ...
+                offset_mV, OFFSET_ABS_LIMIT);
+        fprintf('        ブロワーが通風中だと、無風オフセットに通風中の値が入ってしまいます。\n');
+        ans_re = strtrim(input('        ブロワー停止を確認して再計測しますか？ [y/n]: ', 's'));
+        if ~any(strcmpi(ans_re, {'y', 'yes'}))
+            fprintf('        → この値（%.2f mV）をそのまま使用します。\n\n', offset_mV);
+            return;
+        end
+        input('>> ブロワーが停止していることを確認して Enter を押してください: ');
+        fprintf('\n');
+    end
 end
 
 function name = input_experiment_name_(output_dir)
