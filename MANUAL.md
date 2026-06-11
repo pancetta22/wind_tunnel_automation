@@ -32,11 +32,12 @@ Windy/
 ├ measurement_control/    計測機器の制御（MATLAB）
 ├ diagnostics/            点検・診断ツール（MATLAB）
 ├ leptrino/               6軸センサ通信（Python 32bit）
-└ post_process/           後処理スクリプト（Python 64bit）
+├ post_process/           後処理スクリプト（Python 64bit）
+├ analysis/               比較パワポ生成スクリプト + データ
+└ manual/                 マニュアルパワポ生成スクリプト
 ```
 
-> **analysis/ と manual/ は WindyData フォルダ（`config.json` の `output_dir`）以下に置いてください。**
-> Windows の場合: `C:\Users\<name>\WindyData\analysis\` および `\manual\`
+> **生成される pptx は `config.json` の `output_dir`（WindyData フォルダ）に出力されます。**
 
 ---
 
@@ -117,35 +118,37 @@ check_sensor_limit         % センサ定格確認
 
 ---
 
-## 7. analysis/ と manual/ — WindyData フォルダに配置
+## 7. analysis/ と manual/ — スクリプトは repo、出力は WindyData
 
-これらは **Git リポジトリ外** の `WindyData/` フォルダに置く。
+スクリプト・データは repo 内に管理し、生成された **pptx のみ `output_dir`（WindyData）に保存**される。
 
-### WindyData/analysis/
+### analysis/
 
 | ファイル | 役割 |
 |---|---|
 | `update_aero_data.py` | 新実験の `C_aero.csv` を取り込み → 比較パワポ再生成（これ1つでOK） |
 | `make_rigid_comparison_local.py` | 比較パワポを生成する本体スクリプト |
-| `Windy新システムによる実験結果.pptx` | 比較パワポ（成果物）。実験追加で自動更新 |
-| `研究室MTGテンプレート.pptx` | パワポの雛形（研究室フォーマット） |
+| `研究室MTGテンプレート.pptx` | パワポの雛形（研究室フォーマット・入力ファイル） |
 | `aero_data/` | 各実験の空力係数データ `C_aero.csv` の置き場 |
-| `archive/` | 使い終わった単発スクリプト・旧パワポ |
+| `archive/` | 使い終わった単発スクリプト・旧資料 |
+
+出力: `Windy新システムによる実験結果.pptx` → **`output_dir/`** に保存
 
 ```bash
 # 手動で比較パワポを更新する場合
-cd WindyData/analysis
+cd analysis
 python update_aero_data.py
 ```
 
 実験名に `rigid` を含む場合、後処理の最後に「過去データと比較しますか？」と聞かれ、`y` で自動更新される。
 
-### WindyData/manual/
+### manual/
 
 | ファイル | 役割 |
 |---|---|
 | `make_manual_pptx.py` | マニュアル PowerPoint を生成するスクリプト |
-| `Windy_操作マニュアル.pptx` | 操作マニュアル PowerPoint 版（成果物） |
+
+出力: `Windy_操作マニュアル.pptx` → **`output_dir/`** に保存
 
 ---
 
