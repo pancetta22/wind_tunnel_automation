@@ -26,6 +26,13 @@ import json
 import shutil
 import subprocess
 
+# 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AERO_DATA  = os.path.join(SCRIPT_DIR, "aero_data")
 GEN_SCRIPT = os.path.join(SCRIPT_DIR, "make_rigid_comparison_local.py")

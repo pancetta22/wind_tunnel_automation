@@ -25,6 +25,7 @@
 
 import os
 import re
+import sys
 import json
 import glob
 import pandas as pd
@@ -34,6 +35,15 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from tqdm import tqdm
 import traceback
+
+# 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
+# 日本語Windows(cp932)など、出力先が表現できない文字を含む print があっても
+# UnicodeEncodeError で中断せず、その文字を '?' 等に置換して続行する。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
 
 
 def angle_from_name(name, sign):
@@ -46,7 +56,7 @@ def angle_from_name(name, sign):
 
 # ロータリーステージ設定
 #   origin_pulse は「その実験を計測した時の値」を使うのが正しい
-#   （α₀ は計測時の原点を基準に測られているため）。
+#   （α0 は計測時の原点を基準に測られているため）。
 #   優先1: 実験フォルダの experiment_log.json（run_experiment が計測時に記録）
 #   優先2: リポジトリルートの config.json（現在の設定。古いログにはキーが無い）
 #   優先3: 既定値 11025
@@ -251,7 +261,7 @@ def drift():
 
     data_wind = pd.read_csv("windspeed.csv", skiprows=2)
     rho = float(pd.read_csv("windspeed.csv", header=None).iloc[0, 1])
-    S = 0.04  # 翼面積 [m²]
+    S = 0.04  # 翼面積 [m^2]
     U_P, U_M, q_P, q_M = [], [], [], []
     for i in range(len(data_wind)):
         if "Pdata" in data_wind.loc[i, "name"] and data_wind.loc[i, "name"].endswith("00.00"):
@@ -539,11 +549,11 @@ def plot_PM():
 
 
 def report_zero_lift():
-    """C_aero_raw の線形域から α₀（ゼロ揚力角）を推定し、
+    """C_aero_raw の線形域から α0（ゼロ揚力角）を推定し、
     次回実験に向けた ORIGIN_PULSE 推奨値をターミナルに出力する。
 
     推定範囲: AoA = -5° 〜 +10°（失速前の線形域）
-    推奨値  : ORIGIN_PULSE_next = ORIGIN_PULSE - round(α₀ × PULSE_PER_DEG)
+    推奨値  : ORIGIN_PULSE_next = ORIGIN_PULSE - round(α0 × PULSE_PER_DEG)
     """
     # 前回実行のレポートが残ると、データ不足でスキップした場合に
     # 古い推奨値が y/n プロンプトに出てしまうため、先に削除しておく。
@@ -570,11 +580,11 @@ def report_zero_lift():
 
     sep = "=" * 56
     print(sep)
-    print("  ゼロ揚力角 (α₀) 推定レポート")
+    print("  ゼロ揚力角 (α0) 推定レポート")
     print(sep)
     print(f"  回帰範囲          : AoA = {sub['AoA'].min():.0f}° 〜 {sub['AoA'].max():.0f}°")
     print(f"  Cl スロープ       : {p[0]:.4f} /°  ({p[0]*180/math.pi:.4f} /rad)")
-    print(f"  α₀                : {alpha0:+.3f}°   [Cl(0°) = {Cl_at0:+.4f}]")
+    print(f"  α0                : {alpha0:+.3f}°   [Cl(0°) = {Cl_at0:+.4f}]")
     print(sep)
     print(f"  計測時の原点パルス: {ORIGIN_PULSE} pulse  (experiment_log → config.json の順で取得)")
     print(f"  補正量            : {correction:+d} pulse  ({alpha0:+.3f}°)")

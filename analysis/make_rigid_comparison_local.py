@@ -7,9 +7,16 @@ Ito(240521/240603/241223) + 250924/251020 + 260417/260424/260430/260520 + 260605
 260605/260605_2 は風洞自動化新システムによる計測
 """
 
-import os, io, struct
+import os, io, struct, sys
 import numpy as np
 import pandas as pd
+
+# 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
 from scipy.interpolate import interp1d
 import matplotlib
 matplotlib.use("Agg")
