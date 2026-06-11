@@ -172,7 +172,10 @@ def average():
 def drift():
     data = pd.read_csv("av_Forces.csv", usecols=[0, 1, 2, 3, 4, 5, 6])
     data.columns = ["name", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
-    data.loc[:, "Fx":"Mz"] = data.loc[:, "Fx":"Mz"] - data.loc[0, "Fx":"Mz"]  # 初期オフセットをゼロ
+    _C6 = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+    # 初期オフセットをゼロに（.loc[:, "A":"B"] のスライス代入は新しい pandas で
+    # dtype 不整合エラーになるため、列リスト代入＋float化で安全に行う）
+    data[_C6] = data[_C6].astype(float) - data.loc[0, _C6].astype(float)
     Pofst = np.empty((0, len(data.columns)))
     Mofst = np.empty((0, len(data.columns)))
     Pdata = np.empty((0, len(data.columns)))
@@ -292,14 +295,17 @@ def calc():
     Mofst = pd.read_csv("Mofst_Ncm.csv", index_col=0)
     Pdata = pd.read_csv("Pdata_Ncm.csv", index_col=0)
     Mdata = pd.read_csv("Mdata_Ncm.csv", index_col=0)
-    Pdata.loc[:, "Fx":"Mz"] = Pdata.loc[:, "Fx":"Mz"] - Pofst.loc[:, "Fx":"Mz"]
-    Mdata.loc[:, "Fx":"Mz"] = Mdata.loc[:, "Fx":"Mz"] - Mofst.loc[:, "Fx":"Mz"]
+    _C6 = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+    Pdata[_C6] = Pdata[_C6].astype(float) - Pofst[_C6].astype(float)
+    Mdata[_C6] = Mdata[_C6].astype(float) - Mofst[_C6].astype(float)
     data = pd.concat([Mdata.iloc[::-1], Pdata], ignore_index=True)
 
     # 空力中心まわり
+    _CF = ["Fx", "Fy", "Fz"]
+    _CM = ["Mx", "My", "Mz"]
     F_adcenter_gf = data.copy()
-    F_adcenter_gf.loc[:, "Fx":"Fz"] = data.loc[:, "Fx":"Fz"] / 9.8 * 1000       # N → gf
-    F_adcenter_gf.loc[:, "Mx":"Mz"] = data.loc[:, "Mx":"Mz"] / 9.8 * 1000 * 10  # Nm → gf10cm
+    F_adcenter_gf[_CF] = data[_CF].astype(float) / 9.8 * 1000        # N → gf
+    F_adcenter_gf[_CM] = data[_CM].astype(float) / 9.8 * 1000 * 10   # Nm → gf10cm
     calbmatrix = np.matrix([
         [1, 0, 0, 0, 0, 0],
         [0, 0, 1, 0, 0, 0],
@@ -320,8 +326,8 @@ def calc():
         F_adcenter_gf.loc[i, "My"] = F[0, 4]
         F_adcenter_gf.loc[i, "Mz"] = F[0, 5]
     F_adcenter = F_adcenter_gf
-    F_adcenter.loc[:, "Fx":"Fz"] = F_adcenter.loc[:, "Fx":"Fz"] * 9.8 / 1000        # gf → N
-    F_adcenter.loc[:, "Mx":"Mz"] = F_adcenter.loc[:, "Mx":"Mz"] * 9.8 / 1000 / 10   # gf10cm → Nm
+    F_adcenter[_CF] = F_adcenter[_CF].astype(float) * 9.8 / 1000        # gf → N
+    F_adcenter[_CM] = F_adcenter[_CM].astype(float) * 9.8 / 1000 / 10   # gf10cm → Nm
     F_adcenter = F_adcenter.rename(
         columns={"Fx": "F1", "Fy": "F2", "Fz": "F3", "Mx": "F4", "My": "F5", "Mz": "F6"}
     )
