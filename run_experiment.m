@@ -554,7 +554,9 @@ function confirm_blower_(phase)
     else
         msg = 'ブロワーを起動し、風速が安定したことを確認してください';
     end
-    input(sprintf('>> %s。\n   確認できたら Enter を押してください: ', msg));
+    % 's' を付けて文字列として受ける（付けないと入力がMATLAB式として評価され、
+    % 誤って文字を打つと「予約キーワード」等のエラーで落ちる）。
+    input(sprintf('>> %s。\n   確認できたら Enter を押してください: ', msg), 's');
     fprintf('\n');
 end
 
@@ -646,14 +648,14 @@ function met = input_met_conditions_()
     fprintf('  気温・気圧から空気密度 ρ を自動計算します。\n\n');
 
     while true
-        T = input('気温 [℃]: ');
-        if isnumeric(T) && isscalar(T) && T > -20 && T < 50, break; end
+        T = str2double(input('気温 [℃]: ', 's'));
+        if ~isnan(T) && T > -20 && T < 50, break; end
         fprintf('  ※ 有効な気温を入力してください（-20 ～ 50 ℃）\n');
     end
 
     while true
-        P = input('気圧 [mmHg]: ');
-        if isnumeric(P) && isscalar(P) && P > 700 && P < 820, break; end
+        P = str2double(input('気圧 [mmHg]: ', 's'));
+        if ~isnan(P) && P > 700 && P < 820, break; end
         fprintf('  ※ 有効な気圧を入力してください（700 ～ 820 mmHg）\n');
     end
 
@@ -797,7 +799,7 @@ function offset_mV = measure_volt_offset_checked_(s_volt)
             fprintf('        → この値（%.2f mV）をそのまま使用します。\n\n', offset_mV);
             return;
         end
-        input('>> ブロワーが停止していることを確認して Enter を押してください: ');
+        input('>> ブロワーが停止していることを確認して Enter を押してください: ', 's');
         fprintf('\n');
     end
 end
@@ -872,11 +874,12 @@ function [max_angle, angle_step, phase_enabled] = configure_angle_sweep_()
 end
 
 function v = ask_int_(prompt, lo, hi)
-    % lo〜hi の整数を対話で取得する（範囲外・非整数・空入力は再入力）
+    % lo〜hi の整数を対話で取得する（範囲外・非整数・空入力は再入力）。
+    % 文字列で受けて str2double で数値化するため、誤って文字を打っても
+    % input() が評価エラーで落ちず、安全に再入力できる。
     while true
-        val = input(prompt);
-        if isnumeric(val) && isscalar(val) && ~isempty(val) && ...
-                val == floor(val) && val >= lo && val <= hi
+        val = str2double(input(prompt, 's'));
+        if ~isnan(val) && val == floor(val) && val >= lo && val <= hi
             v = val;
             return
         end
@@ -892,9 +895,10 @@ function idx = select_start_phase_()
     fprintf('  3: Pdata（正迎角・有風）\n');
     fprintf('  4: Mdata（負迎角・有風）\n\n');
     while true
-        val = input('開始フェーズ [1-4, デフォルト=1]: ');
-        if isempty(val), idx = 1; break; end
-        if isnumeric(val) && isscalar(val) && ismember(val, 1:4), idx = val; break; end
+        s_in = strtrim(input('開始フェーズ [1-4, デフォルト=1]: ', 's'));
+        if isempty(s_in), idx = 1; break; end
+        val = str2double(s_in);
+        if ~isnan(val) && ismember(val, 1:4), idx = val; break; end
         fprintf('  ※ 1〜4 の数字を入力してください。\n');
     end
     phases = {'Pofst', 'Mofst', 'Pdata', 'Mdata'};
@@ -941,8 +945,8 @@ function ph = ask_goto_phase_()
     fprintf('  3: Pdata（正迎角・有風）\n');
     fprintf('  4: Mdata（負迎角・有風）\n\n');
     while true
-        val = input('フェーズ番号 [1-4]: ');
-        if isnumeric(val) && isscalar(val) && ismember(val, 1:4), ph = val; break; end
+        val = str2double(input('フェーズ番号 [1-4]: ', 's'));
+        if ~isnan(val) && ismember(val, 1:4), ph = val; break; end
         fprintf('  ※ 1〜4 の数字を入力してください。\n');
     end
     phases = {'Pofst', 'Mofst', 'Pdata', 'Mdata'};
