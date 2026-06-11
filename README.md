@@ -266,7 +266,8 @@ MATLAB から Python スクリプト（`leptrino/leptrino_server.py`）をサブ
 | `r6441b_n_samples` | 取得サンプル数 |
 | `r6441b_timeout_sec` | 受信タイムアウト [秒] |
 
-出力ファイル：`pressure_data.csv`（列：`Time_s`, `Pressure_raw`）
+結果はターミナルに表示されます（各サンプル値・平均・標準偏差を V / mV 併記。CSV は出力しません）。
+グラフ（時系列プロット）も表示されるので、計測前のデジボル接触チェック（mV の妥当性確認）に使えます。
 
 > 通信仕様：9600bps / 8bit / パリティなし / ストップビット1 / ハードウェアフロー制御（DTR/DSR）
 

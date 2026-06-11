@@ -64,12 +64,10 @@ valid_idx = pressure_raw ~= 0;
 pressure_data = pressure_raw(valid_idx);
 time_data = timestamps(valid_idx);
 fprintf('Valid samples: %d / %d\n', sum(valid_idx), N_SAMPLES);
-fprintf('Average: %.6f V\n', mean(pressure_data));
-
-output_table = table(time_data, pressure_data, ...
-    'VariableNames', {'Time_s', 'Voltage_V'});
-writetable(output_table, 'pressure_data.csv');
-fprintf('Saved pressure_data.csv\n');
+% 結果はターミナル表示のみ（CSV は出力しない）。
+% mV 併記は計測前のデジボル接触チェック（差圧 mV の妥当性確認）用。
+fprintf('Average: %.6f V  (%.2f mV)\n', mean(pressure_data), mean(pressure_data) * 1000);
+fprintf('Std    : %.6f V  (%.2f mV)\n', std(pressure_data),  std(pressure_data) * 1000);
 
 figure;
 plot(time_data, pressure_data, 'b-o', 'MarkerSize', 3);
