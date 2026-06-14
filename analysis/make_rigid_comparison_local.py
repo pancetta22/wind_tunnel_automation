@@ -7,7 +7,7 @@ Ito(240521/240603/241223) + 250924/251020 + 260417/260424/260430/260520 + 260605
 260605/260605_2 は風洞自動化新システムによる計測
 """
 
-import os, io, struct, sys
+import os, io, struct, sys, json
 import numpy as np
 import pandas as pd
 
@@ -37,11 +37,25 @@ from pptx.enum.text import PP_ALIGN
 from pptx.oxml.ns import qn as _qn
 
 # ─── 定数 ────────────────────────────────────────────────────────────────────
-# --- 考察フォルダ内で自己完結（aero_data/ の C_aero.csv を参照、テンプレ・出力も同フォルダ）---
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
 BASE          = os.path.join(SCRIPT_DIR, "aero_data")   # 各実験 C_aero.csv の置き場
 TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "研究室MTGテンプレート.pptx")
-OUT           = os.path.join(SCRIPT_DIR, "Windy新システムによる実験結果.pptx")
+
+def _output_dir():
+    """config.json の output_dir を返す。無ければ SCRIPT_DIR にフォールバック。"""
+    config_path = os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            d = json.load(f)
+        out = d.get("output_dir", "")
+        if out:
+            os.makedirs(out, exist_ok=True)
+            return out
+    except (OSError, json.JSONDecodeError):
+        pass
+    return SCRIPT_DIR
+
+OUT = os.path.join(_output_dir(), "Windy新システムによる実験結果.pptx")
 
 SLIDE_W = Inches(10.0)
 SLIDE_H = Inches(7.5)
@@ -155,9 +169,17 @@ if os.path.isdir(BASE):
                             "color":  _auto_palette[_ai % len(_auto_palette)],
                             "marker": _auto_markers[_ai % len(_auto_markers)],
                             "date":   _date, "who": "new"}
-        # フォルダ名 → 表示名（数字のみ。typo 綴り force_meausrement_ も吸収）
-        _disp = (_sub.replace("force_measurement_", "").replace("force_meausrement_", "")
-                     .replace("_rigid", ""))
+        # フォルダ名 → 表示名（数字のみ。typo 綴り force_meausrement_ も吸収。
+        #   末尾の "_rigid" は除去し、"_rigid2" 等の連番は ②③… に変換して
+        #   同日複数回の実験を区別する。例: 260611_rigid2 → 260611②）
+        _disp = (_sub.replace("force_measurement_", "")
+                     .replace("force_meausrement_", ""))
+        _mn = _re.search(r"_rigid(\d+)$", _disp)
+        if _mn:
+            _n = int(_mn.group(1))
+            _disp = _disp[:_mn.start()] + (chr(0x245F + _n) if 1 <= _n <= 20 else f"_{_n}")
+        else:
+            _disp = _re.sub(r"_rigid$", "", _disp)
         DISP_NAMES[_sub] = _disp
         ROW_INFO.append((_disp, "new"))
         _ai += 1

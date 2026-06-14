@@ -95,12 +95,12 @@ if contains(lower(exp_name), 'rigid')
         % 実験フォルダの親を探索元として、空力データ同期＋パワポ再生成
         % （venv セットアップで python-pptx 含む必要モジュールは導入済み）
         src_parent = fileparts(exp_dir);
-        fprintf('[比較] 過去データと比較し、analysis フォルダのパワポを更新します...\n');
+        fprintf('[比較] 過去データと比較し、比較パワポを更新します...\n');
         [stc, outc] = system(sprintf('"%s" "%s" "%s"', ...
             venv_python, updater, src_parent));
         if ~isempty(strtrim(outc)), fprintf('%s\n', outc); end
         if stc == 0
-            fprintf('[比較完了] analysis フォルダの比較パワポを更新しました。\n\n');
+            fprintf('[比較完了] 比較パワポを更新しました（保存先: %s）。\n\n', cfg.output_dir);
         else
             fprintf('[比較] 失敗しました（終了コード %d）。\n\n', stc);
         end
