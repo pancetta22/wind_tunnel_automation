@@ -121,7 +121,7 @@ Windy/
 ├── leptrino/                   # Leptrinoセンサ 計測スクリプト（Python）
 │   ├── leptrino_server.py
 │   └── CfsUsb.dll              #   Leptrino USB ドライバ DLL（32bit）
-├── post_process/               # 後処理（風速・空力係数・グラフ生成）
+├── post_process/               # 後処理（風速・空力係数・グラフ・翼型輪郭抽出）
 └── analysis/                   # 分析・比較パワポ（自動更新）
 ```
 

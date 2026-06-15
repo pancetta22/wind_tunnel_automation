@@ -10,6 +10,8 @@
 |---------|------|
 | `calc_force.py` | 6軸力データから空力係数を算出（既存スクリプト改修版） |
 | `make_windspeed.py` | 差圧電圧サマリー → `windspeed.csv` 変換スクリプト |
+| `extract_airfoil.py` | 翼模型の写真（`photo/`）→ 各迎角の翼型輪郭を抽出（3枚平均）|
+| `naca0012.csv` | 翼型輪郭抽出で重ね描きする参照翼型 |
 | `requirements.txt` | 必要 Python パッケージ一覧（venv 自動構築で使用） |
 | `venv/` | 自動生成される仮想環境（Git 管理外） |
 
@@ -102,6 +104,47 @@ k [Pa/mV] = U² × ρ / (2 × V)
 
 ---
 
+## 翼型輪郭の抽出（`extract_airfoil.py`）
+
+実験中に翼模型を撮影した場合（`run_experiment` の写真撮影を有効化）、`photo/` の
+画像から各迎角の翼型輪郭（x/c, y/c）を抽出できる。従来の
+`windtunnel_picture_analysis/extract_airfoil4.py` の輪郭抽出部分
+（緑マーカー検出 → 射影変換 → 迎角で回転 → 赤エッジ抽出 → 翼弦長で正規化）を移植。
+**1迎角3枚の写真は輪郭を平均して1本にまとめる**（PARSEC フィットは行わない）。
+
+```matlab
+% run_postprocess の最後に「翼型輪郭も抽出しますか？ [y/n]」で呼べる
+run_postprocess('C:\Users\...\WindyData\260615_rigid')
+```
+
+```bat
+:: 単体実行（既定で ./photo を読み ./airfoil に出力）
+cd <実験フォルダ>
+post_process\venv\Scripts\python <repo>\post_process\extract_airfoil.py
+:: 中間画像を見て HSV を調整したいとき
+... extract_airfoil.py --debug
+```
+
+| 入力 | 内容 |
+|------|------|
+| `photo/<label><shot>.JPG` | `0deg1.JPG`, `p1deg1.JPG`, `m1deg1.JPG` …（従来式 `<label>.JPG` も可）|
+| `naca0012.csv` | 参照翼型（本フォルダに同梱）|
+| `photo/airfoil_control.csv` | 任意。迎角ごとに HSV 閾値を上書き（列は従来 `control.csv` と同じ）|
+
+| 出力（`<実験フォルダ>/airfoil/`）| 内容 |
+|------|------|
+| `contour/<label>.csv` | 3枚平均した正規化輪郭（x/c, y/c）|
+| `contour/<label>.png` | 平均輪郭 + NACA0012 重ね描き |
+| `contour/<label>_profile.csv` | 共通 x/c 上の上面・下面 y |
+| `shots/<label><shot>.csv` | 各写真の輪郭（ばらつき確認用）|
+| `overlay_all.png` | 全迎角の輪郭を重ねた図 |
+| `debug/` | `--debug` 時のみ（緑マスク・射影・回転・赤マスク）|
+
+> 照明等で輪郭がうまく出ない場合は `--debug` で中間画像を確認し、`airfoil_control.csv`
+> で HSV を調整する。回転補正は従来 +1°（`--rotate-offset` で変更可）。
+
+---
+
 ## 既存スクリプトからの変更点
 
 | 変更内容 | 変更前（旧システム）| 変更後（新システム）|
@@ -116,5 +159,7 @@ k [Pa/mV] = U² × ρ / (2 × V)
 
 ## 必要な Python パッケージ
 
-`requirements.txt` 参照（pandas / numpy / scipy / matplotlib / tqdm / python-pptx）。
-**通常は run_experiment が venv に自動インストールするため手動インストール不要。**
+`requirements.txt` 参照（pandas / numpy / scipy / matplotlib / tqdm / python-pptx /
+opencv-python-headless）。**通常は run_experiment が venv に自動インストールするため
+手動インストール不要**（翼型輪郭抽出を使う際、既存 venv に OpenCV が無ければ
+run_postprocess が自動で追加する）。

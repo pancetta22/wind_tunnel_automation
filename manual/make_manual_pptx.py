@@ -322,10 +322,11 @@ add_text(slide, "計測データ → 風速・空力係数・グラフ（64bit P
 file_table(slide, [
     ("make_windspeed.py", "差圧電圧 → 風速 windspeed.csv"),
     ("calc_force.py",     "6軸力 → 空力係数 C_aero.csv・グラフPNG"),
+    ("extract_airfoil.py","翼の写真 → 翼型輪郭(x/c,y/c)・3枚平均"),
     ("requirements.txt",  "必要 Python パッケージ一覧"),
     ("venv/",             "自動生成される仮想環境（Git管理外）"),
 ], Inches(6.85), Inches(2.2), Inches(5.95), Inches(3.7), C_MID_BLUE,
-   row_h=Inches(0.62), name_size=Pt(12.5))
+   row_h=Inches(0.56), name_size=Pt(12))
 note_bar(slide, "⚙ 自動実行",
          ["run_experiment 完了時に venv 構築から自動。",
           "失敗時は run_postprocess('…') で再実行。"],

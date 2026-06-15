@@ -112,6 +112,8 @@ check_sensor_limit         % センサ定格確認
 |---|---|
 | `make_windspeed.py` | 差圧電圧 → 風速 `windspeed.csv` |
 | `calc_force.py` | 6軸力 → 空力係数 `C_aero.csv` + グラフ PNG |
+| `extract_airfoil.py` | 翼模型の写真 → 翼型輪郭（x/c, y/c）を抽出（後述） |
+| `naca0012.csv` | 翼型輪郭抽出で重ね描きする参照翼型 |
 | `requirements.txt` | 必要 Python パッケージ一覧 |
 | `venv/` | 自動生成される仮想環境（Git 管理外） |
 
@@ -168,7 +170,8 @@ output_dir/<実験名>/
     ▼  post_process/
     ├ windspeed.csv              風速
     ├ C_aero.csv                 空力係数
-    └ *.png                      グラフ
+    ├ *.png                      グラフ
+    └ airfoil/                   翼型輪郭（写真を撮り、抽出した場合）
     │
     ▼  analysis/  （rigid 実験のみ）
     └ output_dir/Windy新システムによる実験結果.pptx  ← 自動更新
@@ -207,6 +210,29 @@ output_dir/<実験名>/
 > **DLNA がうまく動かない場合：** カメラの DLNA 構成は機種・ファームで差がある。
 > `lumix_capture.py` 冒頭の定数（`DLNA_PORT`・`DDD_CANDIDATES`・`CDS_CONTROL_DEFAULT`）を
 > 実機に合わせて調整する。接続だけ確認するには `python lumix_capture.py --check`。
+
+### 撮影画像からの翼型輪郭抽出（`post_process/extract_airfoil.py`）
+
+撮影した `photo/` の画像から、各迎角の翼型輪郭（x/c, y/c）を抽出する。
+従来の `windtunnel_picture_analysis/extract_airfoil4.py` の輪郭抽出部分
+（緑マーカー検出 → 射影変換 → 迎角で回転 → 赤エッジ抽出 → 翼弦長で正規化）を移植したもの。
+**1迎角3枚の写真は輪郭を平均して1本にまとめる。** PARSEC フィットは行わない。
+
+- **実行：** 後処理（`run_postprocess`）の最後に「翼型輪郭も抽出しますか？ [y/n]」で呼べる。
+  単体実行も可：`cd <実験フォルダ>; python <repo>/post_process/extract_airfoil.py`
+- **入力：** `photo/<label><shot>.JPG`（`0deg1.JPG`, `p1deg1.JPG` …）／参照 `naca0012.csv`
+- **出力（`<実験フォルダ>/airfoil/`）：**
+  - `contour/<label>.csv` … 3枚平均した正規化輪郭（x/c, y/c）
+  - `contour/<label>.png` … 平均輪郭 + NACA0012 重ね描き
+  - `contour/<label>_profile.csv` … 共通 x/c 上の上面・下面 y
+  - `shots/<label><shot>.csv` … 各写真の輪郭（ばらつき確認用）
+  - `overlay_all.png` … 全迎角の輪郭を重ねた図
+  - `debug/` … `--debug` 時のみ（緑マスク・射影・回転・赤マスクの中間画像）
+
+> **HSV閾値の調整：** 照明で輪郭がうまく出ない場合、`photo/airfoil_control.csv`
+> （列は従来の `control.csv` と同じ）を置くと迎角ごとに HSV 閾値を上書きできる。
+> まず `--debug` で中間画像を見て緑・赤のマスク具合を確認する。
+> **回転補正：** 従来コードは迎角に +1° 補正していた（`--rotate-offset` で変更可）。
 
 ---
 

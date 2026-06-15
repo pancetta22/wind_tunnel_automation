@@ -82,6 +82,9 @@ fprintf('[後処理完了] グラフを %s に保存しました。\n\n', exp_di
 % --- Step 2.5: ゼロ揚力角からの原点パルス修正（確認の上で config.json を更新）---
 prompt_origin_pulse_update_(exp_dir, fullfile(root, 'config.json'));
 
+% --- Step 2.6: 翼模型の写真から翼型輪郭を抽出（photo/ がある時のみ・確認の上で）---
+prompt_extract_airfoil_(exp_dir, venv_python, fullfile(root, 'post_process', 'extract_airfoil.py'));
+
 % --- Step 3: 過去データとの比較（rigid 実験のみ・確認の上で実行）-----------
 [~, exp_name] = fileparts(exp_dir);
 if contains(lower(exp_name), 'rigid')
@@ -206,6 +209,54 @@ function txt = read_text_utf8_(path)
     end
     txt = fread(fid, [1, Inf], '*char');
     fclose(fid);
+end
+
+
+function prompt_extract_airfoil_(exp_dir, venv_python, extract_script)
+    % photo/ に翼模型の写真があれば、翼型輪郭を抽出するか y/n で確認して実行する。
+    %  各迎角3枚の写真から輪郭を抽出・平均し、exp_dir/airfoil/ に出力する。
+    photo_dir = fullfile(exp_dir, 'photo');
+    if ~isfolder(photo_dir)
+        return   % 写真を撮っていない実験 → 何もしない
+    end
+    imgs = [dir(fullfile(photo_dir, '*.JPG')); dir(fullfile(photo_dir, '*.jpg'))];
+    if isempty(imgs)
+        return
+    end
+    if ~isfile(extract_script)
+        fprintf('[輪郭抽出] extract_airfoil.py が見つかりません: %s\n\n', extract_script);
+        return
+    end
+
+    fprintf('[輪郭抽出] photo/ に写真が %d 枚あります。\n', numel(imgs));
+    ans_ex = strtrim(input('翼型輪郭も抽出しますか？（緑マーカー→射影→赤エッジ→正規化） [y/n]: ', 's'));
+    if ~any(strcmpi(ans_ex, {'y', 'yes'}))
+        fprintf('  → 抽出しませんでした（後で実行: cd %s; python extract_airfoil.py）\n\n', exp_dir);
+        return
+    end
+
+    % OpenCV(cv2) が venv に無ければ導入する（既存 venv は requirements 変更を
+    % 検知しないため、ここで明示的に確認・追加する）。
+    [s_cv, ~] = system(sprintf('"%s" -c "import cv2"', venv_python));
+    if s_cv ~= 0
+        fprintf('[輪郭抽出] OpenCV を venv に導入しています...\n');
+        [~, out_pip] = system(sprintf('"%s" -m pip install opencv-python-headless', venv_python));
+        if ~isempty(strtrim(out_pip)), fprintf('%s\n', out_pip); end
+    end
+
+    % exp_dir をカレントにして実行（既定で ./photo を読み ./airfoil に出力）
+    prev_dir = cd(exp_dir);
+    restore_dir = onCleanup(@() cd(prev_dir));
+    fprintf('[輪郭抽出] 翼型輪郭を抽出中...\n');
+    [st_ex, out_ex] = system(sprintf('"%s" "%s"', venv_python, extract_script));
+    clear restore_dir
+    if ~isempty(strtrim(out_ex)), fprintf('%s\n', out_ex); end
+    if st_ex == 0
+        fprintf('[輪郭抽出完了] %s に保存しました。\n\n', fullfile(exp_dir, 'airfoil'));
+    else
+        fprintf('[輪郭抽出] 失敗しました（終了コード %d）。\n', st_ex);
+        fprintf('  HSV閾値の調整が必要な場合があります（--debug で中間画像を確認できます）。\n\n');
+    end
 end
 
 
