@@ -9,6 +9,7 @@
 #       ok                                           → 接続許可済み
 #   - 接続シーケンス: accctrl (ok待ち) → recmode → getstate
 
+
 import sys
 import time
 import urllib.error
