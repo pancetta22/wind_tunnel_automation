@@ -14,141 +14,90 @@
 #   2. PC側: 表示されたSSID（例: LUMIX-XXXX）にWiFi接続する
 #   3. 本スクリプトを実行する
 
-import json
-import sys
-import urllib.request
-import urllib.error
 
-# ============================================================
-#  設定
-# ============================================================
-CAMERA_IP   = "192.168.54.1"
+# Panasonic Lumix DC-G100D 接続確認スクリプト v2
+#
+# v2変更点: エンドポイントパスの候補を総当たりして特定する
+
+import sys
+import urllib.error
+import urllib.request
+
+CAMERA_IP = "192.168.54.1"
 CAMERA_PORT = 60606
 TIMEOUT_SEC = 5
-BASE_URL    = f"http://{CAMERA_IP}:{CAMERA_PORT}"
+BASE_URL = f"http://{CAMERA_IP}:{CAMERA_PORT}"
+
+# DC-G100D で報告されているパスの候補
+ENDPOINT_CANDIDATES = [
+    "/cam.cgi",
+    "/Lumix/Server0/cc",  # 新世代Lumix API
+    "/v1/cameras/0",  # 別世代
+]
+QUERY = "mode=getstate"
 
 
-# ============================================================
-#  ユーティリティ
-# ============================================================
-def cam_get(params: str) -> dict | None:
-    """
-    cam.cgi にGETリクエストを送り、JSONレスポンスを辞書で返す。
-    失敗時は None を返す。
-    """
-    url = f"{BASE_URL}/cam.cgi?{params}"
+def try_get(path: str, query: str) -> tuple[int | None, str]:
+    """GETリクエストを送り (HTTPステータス, レスポンスボディ) を返す"""
+    url = f"{BASE_URL}{path}?{query}"
     try:
         with urllib.request.urlopen(url, timeout=TIMEOUT_SEC) as resp:
-            body = resp.read().decode("utf-8")
-            return json.loads(body)
+            return resp.status, resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, str(e.reason)
     except urllib.error.URLError as e:
-        print(f"  通信エラー: {e.reason}")
-        return None
-    except json.JSONDecodeError as e:
-        print(f"  JSONパースエラー: {e}")
-        return None
+        return None, str(e.reason)
     except Exception as e:
-        print(f"  予期しないエラー: {e}")
-        return None
+        return None, str(e)
 
 
-def result_str(data: dict | None) -> str:
-    """APIレスポンスの result フィールドを返す（取得不能時は '?'）"""
-    if data is None:
-        return "?"
-    return data.get("result", "?")
-
-
-# ============================================================
-#  Step 1: 疎通確認
-# ============================================================
 print("=" * 52)
-print("  Lumix DC-G100D 接続確認スクリプト")
+print("  Lumix DC-G100D 接続確認スクリプト v2")
 print("=" * 52)
-print()
 print(f"接続先: {BASE_URL}")
 print()
 
-print("=== Step 1: 疎通確認 ===")
-data = cam_get("mode=getstate")
-if data is None:
-    print("  NG: カメラに接続できません。")
+# ============================================================
+#  Step 1: エンドポイント候補を総当たり
+# ============================================================
+print("=== Step 1: エンドポイント探索 ===")
+
+found_path = None
+for path in ENDPOINT_CANDIDATES:
+    status, body = try_get(path, QUERY)
+    if status is None:
+        print(f"  {path:35s} → 接続失敗 ({body})")
+    elif status == 200:
+        print(f"  {path:35s} → HTTP {status} ✓  body={body[:80]}")
+        if found_path is None:
+            found_path = path
+    else:
+        print(f"  {path:35s} → HTTP {status}   body={body[:80]}")
+
+print()
+
+if found_path is None:
+    print("NG: 有効なエンドポイントが見つかりませんでした。")
     print()
-    print("  チェックリスト:")
-    print("  □ カメラのWi-Fiが有効か（画面にSSIDが表示されているか）")
-    print("  □ PCがカメラのSSID（LUMIX-XXXX）に接続しているか")
-    print("  □ IPアドレス・ポートが正しいか")
-    print(f"    現在の設定: IP={CAMERA_IP}, PORT={CAMERA_PORT}")
+    print("追加情報として、カメラのルートにアクセスします...")
+    status, body = try_get("/", "")
+    print(f"  GET / → HTTP {status}")
+    print(f"  body  = {body[:200]}")
     sys.exit(1)
 
-print(f"  OK: カメラから応答を受信しました")
-print(f"  レスポンス: {data}")
+# ============================================================
+#  Step 2: 有効パスでカメラ状態を取得
+# ============================================================
+print(f"=== Step 2: カメラ状態取得（{found_path}） ===")
+status, body = try_get(found_path, "mode=getstate")
+print(f"  HTTP {status}")
+print(f"  body = {body}")
 print()
 
 # ============================================================
-#  Step 2: カメラ情報の取得
+#  Step 3: サマリー
 # ============================================================
-print("=== Step 2: カメラ情報 ===")
-info = cam_get("mode=getinfo&type=allmenu")
-if info is not None and result_str(info) == "ok":
-    # allmenu は機種情報を含む場合がある（機種依存）
-    print(f"  カメラ情報取得: OK")
-else:
-    # 一部機種では対応していないコマンドもある
-    print(f"  カメラ情報取得: スキップ（機種依存）")
-
-# 機種名・ファームウェアバージョンを取得
-info2 = cam_get("mode=getinfo&type=curmenu")
-if info2 is not None:
-    print(f"  curmenu 取得:   OK  → result={result_str(info2)}")
-else:
-    print(f"  curmenu 取得:   NG")
+print("=== 結果サマリー ===")
+print(f"  有効エンドポイント: {BASE_URL}{found_path}")
 print()
-
-# ============================================================
-#  Step 3: 撮影モードの取得
-# ============================================================
-print("=== Step 3: 撮影モード取得 ===")
-state = cam_get("mode=getstate")
-if state is not None and result_str(state) == "ok":
-    cam_mode = state.get("cammode", "不明")
-    print(f"  現在のカメラモード: {cam_mode}")
-    if cam_mode == "recmode":
-        print("  → 撮影モード（リモート撮影に使用可能）")
-    elif cam_mode == "playmode":
-        print("  → 再生モード（撮影するには撮影モードへの切り替えが必要）")
-    else:
-        print(f"  → モード '{cam_mode}'")
-else:
-    print("  NG: モード取得失敗")
-print()
-
-# ============================================================
-#  Step 4: サマリー
-# ============================================================
-print("=== Step 4: 確認結果サマリー ===")
-
-checks = {
-    "疎通（getstate）":   data is not None and result_str(data) == "ok",
-    "情報取得（curmenu）": info2 is not None,
-    "モード取得":         state is not None and result_str(state) == "ok",
-}
-
-all_ok = True
-for label, ok in checks.items():
-    mark = "✓" if ok else "✗"
-    print(f"  {mark} {label}")
-    if not ok:
-        all_ok = False
-
-print()
-if all_ok:
-    print("  ✓ 接続確認 OK — HTTP API でカメラを制御できます。")
-    print()
-    print("  次のステップ:")
-    print("    lumix_capture.py を実行してシャッターテストを行ってください。")
-else:
-    print("  ✗ 一部の確認に失敗しました。上記のエラー内容を確認してください。")
-
-print()
-print("=== 完了 ===")
+print("  次のステップ: 上記エンドポイントを使って lumix_capture.py を作成します。")
