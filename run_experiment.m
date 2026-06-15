@@ -51,6 +51,13 @@ fprintf('[準備] 実験フォルダ : %s\n', exp_dir);
 fprintf('[準備] データフォルダ: %s\n\n', data_dir);
 
 % =====================================================================
+%  0.6. 写真撮影の設定（任意。通風時に各迎角で翼模型を LUMIX で撮影）
+% =====================================================================
+photo_script    = fullfile(fileparts(mfilename('fullpath')), 'diagnostics', 'lumix_capture.py');
+[take_photos, photo_dir] = setup_photos_(exp_dir);
+photo_connected = false;   % 通風フェーズ前のカメラ接続確認を済ませたか
+
+% =====================================================================
 %  1. 機器接続
 % =====================================================================
 fprintf('[接続] 迎角ステージ (%s) に接続中...\n', cfg.qt_adl1_port);
@@ -168,6 +175,15 @@ while ph_idx <= n_phases
             fprintf('[更新] experiment_log.json を更新 (volt_offset_mV = %.4f mV)\n\n', measured_offset);
         else
             fprintf('[警告] オフセット計測失敗 — config.json の設定値 (%.1f mV) を使用します\n\n', cfg.volt_offset_mV);
+        end
+    end
+
+    % ---- 通風フェーズの最初に一度だけカメラ接続を確認 ----
+    %  カメラ画面で接続を許可する操作が要るため、計測中ではなくここで確認する。
+    if take_photos && is_wind_phase_(phase) && ~photo_connected
+        photo_connected = confirm_photo_connection_(cfg.python_exe, photo_script);
+        if ~photo_connected
+            take_photos = false;   % 接続を諦めた → 以降は撮影しない
         end
     end
 
@@ -325,6 +341,15 @@ while ph_idx <= n_phases
             append_volt_summary_(summary_path, idx - 1, pt.target_angle, fname_short, voltages);
             fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
 
+            % ------ j. 写真撮影（通風フェーズのみ。各迎角＋最初の0°で3枚）------
+            %  迎角を保持したまま、力計測の保存後に撮影する（撮影の失敗・遅延が
+            %  力データに影響しないよう、計測の後に実行）。0°は各点に戻る度では
+            %  なく最初の点(idx==1)でのみ撮る。撮影失敗は計測を止めない。
+            if take_photos && is_wind_phase_(phase) && (pt.suffix == 1 || idx == 1)
+                label = angle_label_(pt.target_angle);
+                capture_photos_(cfg.python_exe, photo_script, photo_dir, label, 3);
+            end
+
             idx = idx + 1;   % 正常完了 → 次の計測点へ
 
         catch ME_meas
@@ -423,6 +448,10 @@ switch exp_control
         date_str = sprintf('%04d%02d%02d', year(t_start), month(t_start), day(t_start));
         log_path = fullfile(exp_dir, sprintf('%s_experiment_log.json', date_str));
         fprintf('[準備] 新しい実験フォルダ: %s\n\n', exp_dir);
+
+        % 新しい実験フォルダ用に撮影設定を再確認（フォルダ毎に photo/ を作る）
+        [take_photos, photo_dir] = setup_photos_(exp_dir);
+        photo_connected = false;
 
         preset_start = 0;   % 最初のフェーズから
         continue;           % 外側リスタートループの先頭へ
@@ -992,6 +1021,83 @@ function action = handle_stop_(stage, logger, s_volt, monitor) %#ok<INUSD>
     try; stage.moveToAngle(0); catch; end
     monitor.resetControl();
     action = ask_stop_action_();
+end
+
+function [take_photos, photo_dir] = setup_photos_(exp_dir)
+    % 写真撮影をするか確認し、する場合は実験フォルダ内に photo/ を作る。
+    %  通風時（Pdata/Mdata）に各迎角で翼模型を LUMIX DC-G100D で撮影する。
+    fprintf('=== 写真撮影の設定 ===\n');
+    fprintf('  通風時に各迎角で翼模型を撮影します（LUMIX DC-G100D, Wi-Fi接続）。\n');
+    fprintf('  撮影する場合は、PCをカメラのSSID(G100D-xxxxxx)に接続しておいてください。\n');
+    ans_p = strtrim(input('写真を撮影しますか？ [y/n]: ', 's'));
+    take_photos = any(strcmpi(ans_p, {'y', 'yes'}));
+    photo_dir = '';
+    if take_photos
+        photo_dir = fullfile(exp_dir, 'photo');
+        [~, ~] = mkdir(photo_dir);
+        fprintf('→ 撮影します。各迎角で3枚ずつ photo/ に保存します。\n');
+        fprintf('[準備] 写真フォルダ : %s\n\n', photo_dir);
+    else
+        fprintf('→ 撮影しません。\n\n');
+    end
+end
+
+function tf = is_wind_phase_(phase)
+    % 通風フェーズ（有風）かどうか。オフセット（無風）は 'ofst' を含む。
+    tf = ~contains(phase, 'ofst');
+end
+
+function label = angle_label_(angle)
+    % 迎角 → ファイル名ラベル（0deg / p<deg>deg / m<deg>deg）。
+    %  既存の画像解析（extract_airfoil.py）の命名規則に合わせる。
+    if angle == 0
+        label = '0deg';
+    elseif angle > 0
+        label = sprintf('p%ddeg', angle);
+    else
+        label = sprintf('m%ddeg', abs(angle));
+    end
+end
+
+function ok = confirm_photo_connection_(python_exe, photo_script)
+    % 通風フェーズの撮影前に、カメラ接続を一度だけ確認する。
+    %  カメラ画面に出る「接続を許可しますか？」で「はい」を選ぶ必要がある。
+    %  接続できたら true、ユーザーが諦めたら false（以降の撮影を無効化）。
+    fprintf('=== カメラ接続の確認 ===\n');
+    fprintf('  PCがカメラのWi-Fi(SSID: G100D-xxxxxx)に接続されているか確認してください。\n');
+    fprintf('  接続確認時、カメラ画面に許可確認が出たら「はい」を選んでください。\n\n');
+    while true
+        input('>> 準備ができたら Enter を押してカメラ接続を確認します: ', 's');
+        cmd = sprintf('"%s" "%s" --check', python_exe, photo_script);
+        [st, out] = system(cmd);
+        if ~isempty(strtrim(out)), fprintf('%s\n', out); end
+        if st == 0
+            fprintf('[カメラ] 接続OK。撮影を開始できます。\n\n');
+            ok = true;
+            return
+        end
+        fprintf('[カメラ] 接続できませんでした。\n');
+        ans_r = strtrim(input('  再試行しますか？ [y/n]（n=今回の実験は撮影しない）: ', 's'));
+        if ~any(strcmpi(ans_r, {'y', 'yes'}))
+            fprintf('[カメラ] 撮影を無効化して実験を続行します。\n\n');
+            ok = false;
+            return
+        end
+    end
+end
+
+function capture_photos_(python_exe, photo_script, photo_dir, label, count)
+    % 指定迎角で count 枚撮影し、photo_dir に <label>1.JPG.. として保存する。
+    %  撮影/保存の失敗は計測を止めない（警告のみ）。力データが主、写真は補助。
+    cmd = sprintf('"%s" "%s" --out "%s" --name "%s" --count %d', ...
+        python_exe, photo_script, photo_dir, label, count);
+    [st, out] = system(cmd);
+    if ~isempty(strtrim(out)), fprintf('%s\n', out); end
+    if st == 0
+        fprintf('[撮影] %s を %d 枚保存しました。\n\n', label, count);
+    else
+        fprintf('[撮影][警告] %s の撮影/保存に失敗しました（実験は続行します）。\n\n', label);
+    end
 end
 
 function notify_sound_(n_tones)

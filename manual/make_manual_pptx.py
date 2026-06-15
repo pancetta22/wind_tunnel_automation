@@ -274,10 +274,11 @@ rows = [
     ("check_sensor_limit.m",       "6軸センサの定格（最大計測レンジ）を確認"),
     ("weight_check.m",             "既知のおもりを載せて力センサの読みを検証"),
     ("tare_measure.m",             "ゼロ点を取り、その基準からの6軸力を表示"),
-    ("lumix_check_connection.py",  "カメラ（LUMIX）の接続確認（Python）"),
+    ("lumix_check_connection.py",  "カメラ（LUMIX DC-G100D）の接続確認"),
+    ("lumix_capture.py",           "シャッター制御＋画像DL（実験中の翼撮影で使用）"),
 ]
 file_table(slide, rows, Inches(0.4), Inches(1.3), Inches(12.53), Inches(4.5),
-           C_GREEN, row_h=Inches(0.72))
+           C_GREEN, row_h=Inches(0.62))
 
 note_bar(slide, "👤 使い方",
          ["MATLAB のルートで  setup_paths  を1回実行 → 各ツールを関数名で実行できる。",
@@ -385,7 +386,7 @@ for i, (ttl, body, bg, fg) in enumerate(flow):
                  font_size=Pt(24), bold=True, color=C_MID_BLUE, align=PP_ALIGN.CENTER)
 
 note_bar(slide, "📁 実験フォルダの中身（output_dir/<実験名>/）",
-         ["data/ … 各計測点の6軸センサCSV     ＊_volt_summary.csv … フェーズ毎の差圧電圧",
+         ["data/ … 各計測点の6軸センサCSV     photo/ … 翼模型の写真（撮影時）     ＊_volt_summary.csv … 差圧電圧",
           "＊_experiment_log.json … 気温・気圧・校正定数      windspeed.csv / C_aero.csv / ＊.png … 後処理で生成"],
          Inches(0.4), Inches(4.05), Inches(12.53), Inches(1.15), C_MID_BLUE, C_PROG_BG)
 

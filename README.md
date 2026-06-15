@@ -112,11 +112,11 @@ Windy/
 │   ├── check_sensor_limit.m        # 力センサ定格確認
 │   ├── weight_check.m              # 既知荷重による力センサ確認
 │   ├── tare_measure.m              # ゼロ点基準 6軸力測定
-│   └── lumix_check_connection.py   # カメラ接続確認
+│   ├── lumix_check_connection.py   # カメラ接続確認
+│   └── lumix_capture.py            # シャッター制御＋画像DL（実験中の翼撮影）
 │
 ├── manual/                     # 操作マニュアルと生成スクリプト
-│   ├── Windy_操作マニュアル.pptx
-│   └── make_manual_pptx.py
+│   └── make_manual_pptx.py     #   （pptx は output_dir に出力）
 │
 ├── leptrino/                   # Leptrinoセンサ 計測スクリプト（Python）
 │   ├── leptrino_server.py
