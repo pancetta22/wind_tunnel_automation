@@ -12,18 +12,19 @@
 #   0: 撮影成功
 #   1: 接続失敗 / 撮影失敗
 
-import sys
-import urllib.request
-import urllib.error
-import xml.etree.ElementTree as ET
-import time
 
-CAMERA_IP        = "192.168.54.1"
-CAMERA_PORT      = 80
-TIMEOUT_SEC      = 5
-BASE_URL         = f"http://{CAMERA_IP}:{CAMERA_PORT}"
+import sys
+import time
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+
+CAMERA_IP = "192.168.54.1"
+CAMERA_PORT = 80
+TIMEOUT_SEC = 5
+BASE_URL = f"http://{CAMERA_IP}:{CAMERA_PORT}"
 ACC_POLL_INTERVAL = 1.0
-ACC_POLL_TIMEOUT  = 15.0
+ACC_POLL_TIMEOUT = 15.0
 
 
 # ============================================================
@@ -60,9 +61,7 @@ def connect() -> bool:
     """接続シーケンス（accctrl → recmode）を実行する"""
     start = time.time()
     while time.time() - start < ACC_POLL_TIMEOUT:
-        status, body = cam_get_raw(
-            "mode=accctrl&type=req_acc&value=0&value2=Windy"
-        )
+        status, body = cam_get_raw("mode=accctrl&type=req_acc&value=0&value2=Windy")
         acc = body.strip().split(",")[0] if status == 200 else None
         if acc == "ok":
             break
