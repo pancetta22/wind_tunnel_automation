@@ -73,7 +73,10 @@ def sync(sources):
         for sub in sorted(os.listdir(src)):
             if "rigid" not in sub.lower():
                 continue
-            ca = os.path.join(src, sub, "C_aero.csv")
+            # 新構成 <sub>/post_process/C_aero.csv を優先、旧フラット <sub>/C_aero.csv も可
+            ca = os.path.join(src, sub, "post_process", "C_aero.csv")
+            if not os.path.isfile(ca):
+                ca = os.path.join(src, sub, "C_aero.csv")
             if not os.path.isfile(ca):
                 continue
             dst_dir = os.path.join(AERO_DATA, sub)

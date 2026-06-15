@@ -11,10 +11,13 @@
 #   drift()  : windspeed.csv のフォーマットは既存と同一（変更なし）。
 #
 # 【実行方法】
-#   cd <解析フォルダ>          ← data/ フォルダと windspeed.csv が存在する場所
+#   cd <解析フォルダ>          ← windspeed.csv が存在する場所（新構成では post_process/）
 #   python calc_force.py
 #
 # 【必要な入力ファイル】
+#   新構成: post_process/ で実行し、data/ と *_experiment_log.json は
+#           ../force_measurement から読む。出力はカレント(post_process/)へ。
+#   旧構成(フラット): data/ と windspeed.csv が同じフォルダにある（従来どおり）。
 #   data/        6軸センサ CSV（全4フェーズ 244ファイル）
 #   windspeed.csv  差圧電圧→風速変換済みCSV（make_windspeed.py で生成）
 #
@@ -63,10 +66,25 @@ def angle_from_name(name, sign):
 PULSE_PER_DEG = 250     # pulse per degree (ARS-936-HP: 0.004°/pulse)
 
 
+def _raw_dir():
+    """生データ（data/ と *_experiment_log.json）がある場所を返す。
+      新構成: post_process/ で実行 → ../force_measurement
+      旧構成(フラット): 実験フォルダ直下で実行 → カレント
+    どちらの構成でも calc_force をそのまま動かせるようにする。"""
+    fm = os.path.join("..", "force_measurement")
+    if os.path.isdir(os.path.join(fm, "data")):
+        return fm
+    if os.path.isdir("data"):
+        return "."
+    if os.path.isdir(fm):
+        return fm
+    return "."
+
+
 def _load_origin_pulse(default=11025):
     """origin_pulse を experiment_log → config.json → 既定値 の順で決める。
-    カレントディレクトリ＝実験フォルダで実行される前提（run_postprocess が cd する）。"""
-    logs = sorted(glob.glob("*_experiment_log.json"))
+    カレントディレクトリ＝解析フォルダで実行される前提（run_postprocess が cd する）。"""
+    logs = sorted(glob.glob(os.path.join(_raw_dir(), "*_experiment_log.json")))
     for lp in reversed(logs):                      # 複数あれば新しい日付を優先
         try:
             with open(lp, encoding="utf-8") as f:
@@ -110,8 +128,7 @@ def _check_duplicate_points(folder_list):
 
 
 def average():
-    dir = os.getcwd()
-    data_dir = "%s/data" % dir
+    data_dir = os.path.join(_raw_dir(), "data")
 
     folder_list = os.listdir(data_dir)
     folder_list = sorted(folder_list)

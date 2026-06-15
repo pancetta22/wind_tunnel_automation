@@ -423,8 +423,20 @@ def main() -> int:
     args = parser.parse_args()
 
     exp_dir = os.getcwd()
-    photo_dir = args.photo_dir or os.path.join(exp_dir, "photo")
-    out_dir = args.out or os.path.join(exp_dir, "airfoil")
+    # 既定の入出力先。新構成(force_measurement/・post_process/)を優先し、
+    # 無ければ旧フラット構成(./photo, ./airfoil)にフォールバック。
+    if args.photo_dir:
+        photo_dir = args.photo_dir
+    elif os.path.isdir(os.path.join(exp_dir, "force_measurement", "photo")):
+        photo_dir = os.path.join(exp_dir, "force_measurement", "photo")
+    else:
+        photo_dir = os.path.join(exp_dir, "photo")
+    if args.out:
+        out_dir = args.out
+    elif os.path.isdir(os.path.join(exp_dir, "force_measurement")):
+        out_dir = os.path.join(exp_dir, "post_process", "airfoil")
+    else:
+        out_dir = os.path.join(exp_dir, "airfoil")
 
     if not os.path.isdir(photo_dir):
         print(f"[エラー] 写真フォルダがありません: {photo_dir}", file=sys.stderr)

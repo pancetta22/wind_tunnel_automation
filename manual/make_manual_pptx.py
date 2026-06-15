@@ -366,8 +366,8 @@ slide_header(slide, "データの流れ", "計測から比較パワポまで、�
 
 flow = [
     ("run_experiment.m", "MATLAB で実行\n4フェーズを自動計測", C_GREEN_LIGHT, C_GREEN),
-    ("実験フォルダ", "output_dir/<実験名>/\ndata/・volt_summary・log", C_GRAY_BG, C_MID_BLUE),
-    ("post_process", "windspeed.csv\nC_aero.csv・グラフPNG", C_PROG_BG, C_MID_BLUE),
+    ("force_measurement", "生データ\ndata/・写真・volt_summary・log", C_GRAY_BG, C_MID_BLUE),
+    ("post_process", "解析結果\nwindspeed・C_aero・図・airfoil", C_PROG_BG, C_MID_BLUE),
     ("analysis", "比較パワポを output_dir へ\n（rigid 実験のみ）", RGBColor(0xEE, 0xE7, 0xF6), C_PURPLE),
 ]
 bw, bh, gap = Inches(2.7), Inches(1.85), Inches(0.55)
@@ -386,9 +386,9 @@ for i, (ttl, body, bg, fg) in enumerate(flow):
         add_text(slide, "▶", x + bw, y + Inches(0.62), gap, Inches(0.6),
                  font_size=Pt(24), bold=True, color=C_MID_BLUE, align=PP_ALIGN.CENTER)
 
-note_bar(slide, "📁 実験フォルダの中身（output_dir/<実験名>/）",
-         ["data/ … 各計測点の6軸センサCSV     photo/ … 翼模型の写真（撮影時）     ＊_volt_summary.csv … 差圧電圧",
-          "＊_experiment_log.json … 気温・気圧・校正定数      windspeed.csv / C_aero.csv / ＊.png … 後処理で生成"],
+note_bar(slide, "📁 実験フォルダの中身（output_dir/<実験名>/ … force_measurement と post_process に分離）",
+         ["force_measurement/ … data/（6軸CSV）・photo/（写真）・＊_volt_summary.csv・＊_experiment_log.json",
+          "post_process/ … windspeed.csv・C_aero.csv・＊.png（グラフ）・airfoil/（翼型輪郭）＝すべて後処理で生成"],
          Inches(0.4), Inches(4.05), Inches(12.53), Inches(1.15), C_MID_BLUE, C_PROG_BG)
 
 note_bar(slide, "🔁 後処理だけやり直したいとき",

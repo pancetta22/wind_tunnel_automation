@@ -24,9 +24,9 @@
 1. `post_process/venv` が無ければ **64bit Python**（`config.json` の `python_exe_64`）で
    自動作成し、`requirements.txt` のパッケージを自動インストール
    （venv が壊れていた場合は自動で作り直す）
-2. `make_windspeed.py` を実行 → `windspeed.csv` を実験フォルダに生成
+2. `make_windspeed.py` を実行 → `windspeed.csv` を `post_process/` に生成
    （ρ は実験時に入力した気温・気圧から、電圧オフセットは Pofst 計測値から自動設定）
-3. `calc_force.py` を実行 → 空力係数 CSV・グラフ PNG を実験フォルダに生成
+3. `calc_force.py` を実行 → 空力係数 CSV・グラフ PNG を `post_process/` に生成
 4. 実験名に "rigid" を含む場合、「過去データと比較しますか？」→ **y** で
    `analysis/` の比較パワポも自動更新
 
@@ -47,11 +47,21 @@ run_postprocess('C:\Users\...\WindyData\260615_rigid')
 
 ### Python を直接叩きたい場合（上級者向け）
 
+新構成（`force_measurement/` と `post_process/` に分離）では、生データを
+`force_measurement/` から読み、結果を `post_process/` に書く：
+
 ```bat
+:: windspeed は force_measurement を読み post_process へ出力
 post_process\venv\Scripts\python post_process\make_windspeed.py ^
-    --volt_dir <実験フォルダ> --date YYYYMMDD --out <実験フォルダ>
-post_process\venv\Scripts\python post_process\calc_force.py
+    --volt_dir <実験フォルダ>\force_measurement --date YYYYMMDD ^
+    --out <実験フォルダ>\post_process
+:: calc_force は post_process をカレントにして実行（data/・log は ../force_measurement を自動参照）
+cd <実験フォルダ>\post_process
+<repo>\post_process\venv\Scripts\python <repo>\post_process\calc_force.py
 ```
+
+（旧フラット構成の実験フォルダでは、従来どおり `--volt_dir <実験フォルダ>`・
+`--out <実験フォルダ>` とし、`calc_force.py` は実験フォルダ直下で実行する）
 
 （`--rho` 等は省略すると実験フォルダ内の experiment_log.json から自動取得）
 
@@ -86,7 +96,7 @@ k [Pa/mV] = U² × ρ / (2 × V)
 
 ---
 
-## 出力ファイル（実験フォルダに生成）
+## 出力ファイル（`<実験フォルダ>/post_process/` に生成）
 
 | 出力ファイル | 内容 |
 |------------|------|
@@ -127,11 +137,11 @@ post_process\venv\Scripts\python <repo>\post_process\extract_airfoil.py
 
 | 入力 | 内容 |
 |------|------|
-| `photo/<label><shot>.JPG` | `0deg1.JPG`, `p1deg1.JPG`, `m1deg1.JPG` …（従来式 `<label>.JPG` も可）|
+| `force_measurement/photo/<label><shot>.JPG` | `0deg1.JPG`, `p1deg1.JPG`, `m1deg1.JPG` …（従来式 `<label>.JPG` も可）|
 | `naca0012.csv` | 参照翼型（本フォルダに同梱）|
-| `photo/airfoil_control.csv` | 任意。迎角ごとに HSV 閾値を上書き（列は従来 `control.csv` と同じ）|
+| `force_measurement/photo/airfoil_control.csv` | 任意。迎角ごとに HSV 閾値を上書き（列は従来 `control.csv` と同じ）|
 
-| 出力（`<実験フォルダ>/airfoil/`）| 内容 |
+| 出力（`<実験フォルダ>/post_process/airfoil/`）| 内容 |
 |------|------|
 | `contour/<label>.csv` | 3枚平均した正規化輪郭（x/c, y/c）|
 | `contour/<label>.png` | 平均輪郭 + NACA0012 重ね描き |

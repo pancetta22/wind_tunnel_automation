@@ -45,7 +45,10 @@ end
 % =====================================================================
 exp_name = input_experiment_name_(cfg.output_dir);
 exp_dir  = fullfile(cfg.output_dir, exp_name);
-data_dir = fullfile(exp_dir, 'data');
+% 出力は force_measurement/（生データ）と post_process/（解析結果）に分ける。
+% 計測で作るのは force_measurement/ 側（data/・写真・volt_summary・ログ）。
+fm_dir   = fullfile(exp_dir, 'force_measurement');
+data_dir = fullfile(fm_dir, 'data');
 [~, ~]   = mkdir(data_dir);
 fprintf('[準備] 実験フォルダ : %s\n', exp_dir);
 fprintf('[準備] データフォルダ: %s\n\n', data_dir);
@@ -54,7 +57,7 @@ fprintf('[準備] データフォルダ: %s\n\n', data_dir);
 %  0.6. 写真撮影の設定（任意。通風時に各迎角で翼模型を LUMIX で撮影）
 % =====================================================================
 photo_script    = fullfile(fileparts(mfilename('fullpath')), 'diagnostics', 'lumix_capture.py');
-[take_photos, photo_dir] = setup_photos_(exp_dir);
+[take_photos, photo_dir] = setup_photos_(fm_dir);
 photo_connected = false;   % 通風フェーズ前のカメラ接続確認を済ませたか
 
 % =====================================================================
@@ -86,8 +89,8 @@ windy_cleanup_guard_ = onCleanup(@() cleanup_devices_(stage, logger, s_volt, mon
 t_start  = datetime('now');
 date_str = sprintf('%04d%02d%02d', year(t_start), month(t_start), day(t_start));
 
-% 実験ログのパス
-log_path = fullfile(exp_dir, sprintf('%s_experiment_log.json', date_str));
+% 実験ログのパス（生データ側 force_measurement/ に置く）
+log_path = fullfile(fm_dir, sprintf('%s_experiment_log.json', date_str));
 
 % =====================================================================
 %  3. 全フェーズ 連続計測
@@ -156,7 +159,7 @@ while ph_idx <= n_phases
     % （初回は対象が無く何もしない）。
     delete_phase_data_(data_dir, phase);
     summary_fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
-    summary_path  = fullfile(exp_dir, summary_fname);
+    summary_path  = fullfile(fm_dir, summary_fname);
     init_volt_summary_(summary_path);
     fprintf('[準備] デジボルサマリー: %s\n\n', summary_fname);
 
@@ -442,15 +445,16 @@ switch exp_control
         % --- 新しい実験フォルダを用意（前回データと混ざらないよう別フォルダ）---
         exp_name = input_experiment_name_(cfg.output_dir);
         exp_dir  = fullfile(cfg.output_dir, exp_name);
-        data_dir = fullfile(exp_dir, 'data');
+        fm_dir   = fullfile(exp_dir, 'force_measurement');
+        data_dir = fullfile(fm_dir, 'data');
         [~, ~]   = mkdir(data_dir);
         t_start  = datetime('now');
         date_str = sprintf('%04d%02d%02d', year(t_start), month(t_start), day(t_start));
-        log_path = fullfile(exp_dir, sprintf('%s_experiment_log.json', date_str));
+        log_path = fullfile(fm_dir, sprintf('%s_experiment_log.json', date_str));
         fprintf('[準備] 新しい実験フォルダ: %s\n\n', exp_dir);
 
         % 新しい実験フォルダ用に撮影設定を再確認（フォルダ毎に photo/ を作る）
-        [take_photos, photo_dir] = setup_photos_(exp_dir);
+        [take_photos, photo_dir] = setup_photos_(fm_dir);
         photo_connected = false;
 
         preset_start = 0;   % 最初のフェーズから
@@ -847,7 +851,8 @@ function name = input_experiment_name_(output_dir)
         % 同名フォルダを再利用すると data/ に前回の CSV が混在し、
         % calc_force の結果が汚染されるため（既定は別名の入力へ戻る）。
         if nargin >= 1
-            old_csv = dir(fullfile(output_dir, name, 'data', '*.csv'));
+            old_csv = [dir(fullfile(output_dir, name, 'force_measurement', 'data', '*.csv')); ...
+                       dir(fullfile(output_dir, name, 'data', '*.csv'))];   % 新旧両構成をチェック
             if ~isempty(old_csv)
                 fprintf('  ※ フォルダ [%s] には既に計測データがあります（%d ファイル）。\n', ...
                         name, numel(old_csv));
@@ -1023,8 +1028,8 @@ function action = handle_stop_(stage, logger, s_volt, monitor) %#ok<INUSD>
     action = ask_stop_action_();
 end
 
-function [take_photos, photo_dir] = setup_photos_(exp_dir)
-    % 写真撮影をするか確認し、する場合は実験フォルダ内に photo/ を作る。
+function [take_photos, photo_dir] = setup_photos_(fm_dir)
+    % 写真撮影をするか確認し、する場合は force_measurement/photo/ を作る。
     %  通風時（Pdata/Mdata）に各迎角で翼模型を LUMIX DC-G100D で撮影する。
     fprintf('=== 写真撮影の設定 ===\n');
     fprintf('  通風時に各迎角で翼模型を撮影します（LUMIX DC-G100D, Wi-Fi接続）。\n');
@@ -1033,7 +1038,7 @@ function [take_photos, photo_dir] = setup_photos_(exp_dir)
     take_photos = any(strcmpi(ans_p, {'y', 'yes'}));
     photo_dir = '';
     if take_photos
-        photo_dir = fullfile(exp_dir, 'photo');
+        photo_dir = fullfile(fm_dir, 'photo');
         [~, ~] = mkdir(photo_dir);
         fprintf('→ 撮影します。各迎角で3枚ずつ photo/ に保存します。\n');
         fprintf('[準備] 写真フォルダ : %s\n\n', photo_dir);
@@ -1170,7 +1175,7 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
             continue;   % このフェーズは計測対象外 → 要求しない
         end
         fname = make_filename(date_str, '', phases{i}, 0, 0, 'volt_summary');
-        if ~isfile(fullfile(exp_dir, fname))
+        if ~isfile(fullfile(exp_dir, 'force_measurement', fname))
             fprintf('[後処理] %s がまだありません → 後処理をスキップ\n', fname);
             fprintf('         後で再実行する場合: run_postprocess(''%s'')\n\n', exp_dir);
             return

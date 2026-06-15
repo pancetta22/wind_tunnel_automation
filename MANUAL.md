@@ -157,21 +157,26 @@ python update_aero_data.py
 
 ## 8. データの流れ
 
+出力は実験フォルダの中で **`force_measurement/`（生データ）** と
+**`post_process/`（解析結果）** に分かれる。
+
 ```
 run_experiment.m
     │
     ▼
 output_dir/<実験名>/
-    ├ data/                      各計測点の6軸センサ CSV
-    ├ photo/                     翼模型の写真（撮影する場合・後述）
-    ├ *_volt_summary.csv         フェーズ毎の差圧電圧
-    └ *_experiment_log.json      気温・気圧・校正定数
+    ├ force_measurement/             ← 生データ（計測で生成）
+    │   ├ data/                      各計測点の6軸センサ CSV
+    │   ├ photo/                     翼模型の写真（撮影する場合・後述）
+    │   ├ *_volt_summary.csv         フェーズ毎の差圧電圧
+    │   └ *_experiment_log.json      気温・気圧・校正定数
     │
-    ▼  post_process/
-    ├ windspeed.csv              風速
-    ├ C_aero.csv                 空力係数
-    ├ *.png                      グラフ
-    └ airfoil/                   翼型輪郭（写真を撮り、抽出した場合）
+    ▼  post_process/                 ← 解析結果（後処理で生成）
+    │   ├ windspeed.csv              風速
+    │   ├ C_aero.csv                 空力係数
+    │   ├ *.png                      グラフ
+    │   ├ zero_lift_report.json      ゼロ揚力角の推定
+    │   └ airfoil/                   翼型輪郭（写真を撮り、抽出した場合）
     │
     ▼  analysis/  （rigid 実験のみ）
     └ output_dir/Windy新システムによる実験結果.pptx  ← 自動更新
@@ -183,7 +188,7 @@ output_dir/<実験名>/
 
 `run_experiment` の開始時（実験フォルダ作成後）に「写真を撮影しますか？ [y/n]」と聞かれる。
 `y` を選ぶと、**通風フェーズ（Pdata / Mdata）の各迎角で翼模型を3枚ずつ自動撮影**し、
-実験フォルダ内の `photo/` サブフォルダに保存する。
+`force_measurement/photo/` サブフォルダに保存する。
 
 **事前準備：**
 - カメラ（LUMIX DC-G100D）の電源を入れ、Wi-Fi を有効化
@@ -213,15 +218,16 @@ output_dir/<実験名>/
 
 ### 撮影画像からの翼型輪郭抽出（`post_process/extract_airfoil.py`）
 
-撮影した `photo/` の画像から、各迎角の翼型輪郭（x/c, y/c）を抽出する。
+`force_measurement/photo/` の画像から、各迎角の翼型輪郭（x/c, y/c）を抽出する。
 従来の `windtunnel_picture_analysis/extract_airfoil4.py` の輪郭抽出部分
 （緑マーカー検出 → 射影変換 → 迎角で回転 → 赤エッジ抽出 → 翼弦長で正規化）を移植したもの。
 **1迎角3枚の写真は輪郭を平均して1本にまとめる。** PARSEC フィットは行わない。
 
 - **実行：** 後処理（`run_postprocess`）の最後に「翼型輪郭も抽出しますか？ [y/n]」で呼べる。
   単体実行も可：`cd <実験フォルダ>; python <repo>/post_process/extract_airfoil.py`
-- **入力：** `photo/<label><shot>.JPG`（`0deg1.JPG`, `p1deg1.JPG` …）／参照 `naca0012.csv`
-- **出力（`<実験フォルダ>/airfoil/`）：**
+  （`force_measurement/photo/` を読み `post_process/airfoil/` に出力）
+- **入力：** `force_measurement/photo/<label><shot>.JPG`（`0deg1.JPG`, `p1deg1.JPG` …）／参照 `naca0012.csv`
+- **出力（`post_process/airfoil/`）：**
   - `contour/<label>.csv` … 3枚平均した正規化輪郭（x/c, y/c）
   - `contour/<label>.png` … 平均輪郭 + NACA0012 重ね描き
   - `contour/<label>_profile.csv` … 共通 x/c 上の上面・下面 y
@@ -229,7 +235,7 @@ output_dir/<実験名>/
   - `overlay_all.png` … 全迎角の輪郭を重ねた図
   - `debug/` … `--debug` 時のみ（緑マスク・射影・回転・赤マスクの中間画像）
 
-> **HSV閾値の調整：** 照明で輪郭がうまく出ない場合、`photo/airfoil_control.csv`
+> **HSV閾値の調整：** 照明で輪郭がうまく出ない場合、`force_measurement/photo/airfoil_control.csv`
 > （列は従来の `control.csv` と同じ）を置くと迎角ごとに HSV 閾値を上書きできる。
 > まず `--debug` で中間画像を見て緑・赤のマスク具合を確認する。
 > **回転補正：** 従来コードは迎角に +1° 補正していた（`--rotate-offset` で変更可）。
