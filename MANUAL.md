@@ -32,12 +32,12 @@ Windy/
 ├ measurement_control/    計測機器の制御（MATLAB）
 ├ diagnostics/            点検・診断ツール（MATLAB）
 ├ leptrino/               6軸センサ通信（Python 32bit）
-├ post_process/           後処理スクリプト（Python 64bit）
-├ analysis/               比較パワポ生成スクリプト + データ
+├ post_process/           後処理を全て一元化（Python 64bit・venvもここ）
 └ manual/                 マニュアルパワポ生成スクリプト
 ```
 
-> **生成される pptx は `config.json` の `output_dir`（WindyData フォルダ）に出力されます。**
+> **後処理（力・写真・比較）のスクリプトは `post_process/` に集約。出力はすべて
+> `config.json` の `output_dir`（WindyData）以下の各実験フォルダに保存されます。**
 
 ---
 
@@ -106,46 +106,26 @@ check_sensor_limit         % センサ定格確認
 
 > **重要：** `CfsUsb.dll` は 32bit 専用。`config.json` の `python_exe` には **32bit Python** を指定すること。
 
-### post_process/ — 後処理（64bit Python）
+### post_process/ — 後処理を全て一元化（64bit Python）
+
+力・写真・比較の後処理スクリプトをここに集約。venv もここのみに作る。
 
 | ファイル | 役割 |
 |---|---|
-| `make_windspeed.py` | 差圧電圧 → 風速 `windspeed.csv` |
-| `calc_force.py` | 6軸力 → 空力係数 `C_aero.csv` + グラフ PNG |
-| `extract_airfoil.py` | 翼模型の写真 → 翼型輪郭（x/c, y/c）を抽出（後述） |
+| `force_measurement.py` | **力の後処理 入口**。windspeed → 空力係数を順に実行 |
+| `picture_analysis.py` | **写真の後処理 入口**。翼模型写真 → 翼型輪郭（後述） |
+| `make_comparison.py` | 過去の剛体翼データとの比較パワポを生成 |
+| `make_windspeed.py` | 差圧電圧 → 風速 `windspeed.csv`（force_measurement が呼ぶ） |
+| `calc_force.py` | 6軸力 → 空力係数 `C_aero.csv` + グラフ（force_measurement が呼ぶ） |
 | `naca0012.csv` | 翼型輪郭抽出で重ね描きする参照翼型 |
-| `requirements.txt` | 必要 Python パッケージ一覧 |
-| `venv/` | 自動生成される仮想環境（Git 管理外） |
+| `assets/` | 比較用の同梱資産（過去データ `aero_data/`・テンプレ pptx・`archive/`） |
+| `requirements.txt` / `venv/` | パッケージ一覧 / 自動生成される仮想環境（Git 管理外） |
 
 `run_experiment` 完了時に `venv` 構築から自動実行される。失敗時は `run_postprocess('…')` で再実行。
 
 ---
 
-## 7. analysis/ と manual/ — スクリプトは repo、出力は WindyData
-
-スクリプト・データは repo 内に管理し、生成された **pptx のみ `output_dir`（WindyData）に保存**される。
-
-### analysis/
-
-| ファイル | 役割 |
-|---|---|
-| `update_aero_data.py` | 新実験の `C_aero.csv` を取り込み → 比較パワポ再生成（これ1つでOK） |
-| `make_rigid_comparison_local.py` | 比較パワポを生成する本体スクリプト |
-| `研究室MTGテンプレート.pptx` | パワポの雛形（研究室フォーマット・入力ファイル） |
-| `aero_data/` | 各実験の空力係数データ `C_aero.csv` の置き場 |
-| `archive/` | 使い終わった単発スクリプト・旧資料 |
-
-出力: `Windy新システムによる実験結果.pptx` → **`output_dir/`** に保存
-
-```bash
-# 手動で比較パワポを更新する場合
-cd analysis
-python update_aero_data.py
-```
-
-実験名に `rigid` を含む場合、後処理の最後に「過去データと比較しますか？」と聞かれ、`y` で自動更新される。
-
-### manual/
+## 7. manual/ — マニュアル生成
 
 | ファイル | 役割 |
 |---|---|
@@ -157,30 +137,31 @@ python update_aero_data.py
 
 ## 8. データの流れ
 
-出力は実験フォルダの中で **`force_measurement/`（生データ）** と
-**`post_process/`（解析結果）** に分かれる。
+出力は実験フォルダの中で **`force/`（力計測）** と **`picture/`（写真）** に分かれ、
+実験ログは実験フォルダ直下に置かれる。
 
 ```
 run_experiment.m
     │
     ▼
 output_dir/<実験名>/
-    ├ force_measurement/             ← 生データ（計測で生成）
-    │   ├ data/                      各計測点の6軸センサ CSV
-    │   ├ photo/                     翼模型の写真（撮影する場合・後述）
-    │   ├ *_volt_summary.csv         フェーズ毎の差圧電圧
-    │   └ *_experiment_log.json      気温・気圧・校正定数
-    │
-    ▼  post_process/                 ← 解析結果（後処理で生成）
-    │   ├ windspeed.csv              風速
-    │   ├ C_aero.csv                 空力係数
-    │   ├ *.png                      グラフ
-    │   ├ zero_lift_report.json      ゼロ揚力角の推定
-    │   └ airfoil/                   翼型輪郭（写真を撮り、抽出した場合）
-    │
-    ▼  analysis/  （rigid 実験のみ）
-    └ output_dir/Windy新システムによる実験結果.pptx  ← 自動更新
+    ├ <YYYYMMDD>_experiment_log.json   気温・気圧・校正定数（実験直下）
+    ├ force/
+    │   ├ data/         生データ（6軸CSV・volt_summary・volt_raw）
+    │   ├ analysis/     windspeed.csv・C_aero.csv・*.png・zero_lift_report.json
+    │   │                 ↑ force_measurement.py（calc_force）が生成
+    │   └ comparison/   過去剛体翼との比較パワポ（rigid 実験で y を選んだ時）
+    │                     ↑ make_comparison.py が生成
+    └ picture/          ← picture_analysis.py（写真を撮り、抽出した場合）
+        ├ photo/        原画像（p1deg1.JPG …）
+        ├ Gmarkers/ warp/ rotate/ Redge/   各処理ステップの中間画像
+        ├ plot/         3枚平均した正規化輪郭（x/c, y/c）＋図
+        └ control.csv   HSV閾値・flag（無ければ既定を自動生成）
 ```
+
+> 比較パワポ（`Windy新システムによる実験結果.pptx`）は、`make_comparison.py` が
+> WindyData 各実験の `force/analysis/C_aero.csv` と同梱の過去データを集めて生成し、
+> その実験の `force/comparison/` に保存する。
 
 ---
 
@@ -188,7 +169,7 @@ output_dir/<実験名>/
 
 `run_experiment` の開始時（実験フォルダ作成後）に「写真を撮影しますか？ [y/n]」と聞かれる。
 `y` を選ぶと、**通風フェーズ（Pdata / Mdata）の各迎角で翼模型を3枚ずつ自動撮影**し、
-`force_measurement/photo/` サブフォルダに保存する。
+`picture/photo/` サブフォルダに保存する。
 
 **事前準備：**
 - カメラ（LUMIX DC-G100D）の電源を入れ、Wi-Fi を有効化
@@ -200,7 +181,7 @@ output_dir/<実験名>/
 - 0°（各通風フェーズの最初）＋ 各目標迎角で3枚ずつ
 - 力計測の保存後（迎角を保持したまま）に撮影するため、撮影の失敗・遅延が力データに影響しない
 
-**ファイル名（既存の画像解析 `extract_airfoil.py` の命名規則に準拠）：**
+**ファイル名（画像解析 `picture_analysis.py` の命名規則に準拠）：**
 
 | 迎角 | ファイル名 |
 |---|---|
@@ -216,28 +197,28 @@ output_dir/<実験名>/
 > `lumix_capture.py` 冒頭の定数（`DLNA_PORT`・`DDD_CANDIDATES`・`CDS_CONTROL_DEFAULT`）を
 > 実機に合わせて調整する。接続だけ確認するには `python lumix_capture.py --check`。
 
-### 撮影画像からの翼型輪郭抽出（`post_process/extract_airfoil.py`）
+### 撮影画像からの翼型輪郭抽出（`post_process/picture_analysis.py`）
 
-`force_measurement/photo/` の画像から、各迎角の翼型輪郭（x/c, y/c）を抽出する。
+`picture/photo/` の画像から、各迎角の翼型輪郭（x/c, y/c）を抽出する。
 従来の `windtunnel_picture_analysis/extract_airfoil4.py` の輪郭抽出部分
 （緑マーカー検出 → 射影変換 → 迎角で回転 → 赤エッジ抽出 → 翼弦長で正規化）を移植したもの。
+出力は従来 picture_analysis と同じサブフォルダ構成。
 **1迎角3枚の写真は輪郭を平均して1本にまとめる。** PARSEC フィットは行わない。
 
 - **実行：** 後処理（`run_postprocess`）の最後に「翼型輪郭も抽出しますか？ [y/n]」で呼べる。
-  単体実行も可：`cd <実験フォルダ>; python <repo>/post_process/extract_airfoil.py`
-  （`force_measurement/photo/` を読み `post_process/airfoil/` に出力）
-- **入力：** `force_measurement/photo/<label><shot>.JPG`（`0deg1.JPG`, `p1deg1.JPG` …）／参照 `naca0012.csv`
-- **出力（`post_process/airfoil/`）：**
-  - `contour/<label>.csv` … 3枚平均した正規化輪郭（x/c, y/c）
-  - `contour/<label>.png` … 平均輪郭 + NACA0012 重ね描き
-  - `contour/<label>_profile.csv` … 共通 x/c 上の上面・下面 y
-  - `shots/<label><shot>.csv` … 各写真の輪郭（ばらつき確認用）
+  単体実行も可：`python <repo>/post_process/picture_analysis.py --photo_dir <picture/photo> --out <picture>`
+- **入力：** `picture/photo/<label><shot>.JPG`（`0deg1.JPG`, `p1deg1.JPG` …）／参照 `naca0012.csv`
+- **出力（`picture/` の下）：**
+  - `Gmarkers/ warp/ rotate/ Redge/` … 各処理ステップの中間画像（`<label><shot>`）
+  - `plot/<label>.csv` … 3枚平均した正規化輪郭（x/c, y/c）
+  - `plot/<label>.png` … 平均輪郭 + NACA0012 重ね描き
+  - `plot/<label>_profile.csv` … 共通 x/c 上の上面・下面 y
   - `overlay_all.png` … 全迎角の輪郭を重ねた図
-  - `debug/` … `--debug` 時のみ（緑マスク・射影・回転・赤マスクの中間画像）
+  - `control.csv` … 迎角ごとの HSV 閾値・flag（無ければ既定を自動生成）
 
-> **HSV閾値の調整：** 照明で輪郭がうまく出ない場合、`force_measurement/photo/airfoil_control.csv`
-> （列は従来の `control.csv` と同じ）を置くと迎角ごとに HSV 閾値を上書きできる。
-> まず `--debug` で中間画像を見て緑・赤のマスク具合を確認する。
+> **HSV閾値の調整：** 照明で輪郭がうまく出ない場合、自動生成された `picture/control.csv`
+> の HSV 値を編集して再実行する（`flag` を 0 にした迎角はスキップ）。
+> 中間画像（Gmarkers/ など）で緑・赤のマスク具合を確認できる。
 > **回転補正：** 従来コードは迎角に +1° 補正していた（`--rotate-offset` で変更可）。
 
 ---

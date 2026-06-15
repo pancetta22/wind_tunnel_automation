@@ -1,36 +1,38 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# extract_airfoil.py  翼型輪郭 抽出スクリプト（Windy 新システム対応版）
+# picture_analysis.py  翼型輪郭 抽出スクリプト（Windy 新システム対応版）
 #
-# 実験フォルダ内の photo/ にある翼模型の写真から、緑マーカーで射影変換 →
+# 実験フォルダの picture/photo/ にある翼模型の写真から、緑マーカーで射影変換 →
 # 迎角で回転 → 赤エッジ抽出 → 翼弦長で正規化、までを行って各迎角の
 # 翼型輪郭（x/c, y/c）を取り出す。1迎角につき3枚撮った写真は輪郭を平均して
 # 1本にまとめる。
 #
 # 従来の windtunnel_picture_analysis/extract_airfoil4.py の輪郭抽出部分
 # （Gmarkers → warp → rotate → Redge → 正規化）を移植したもの。modPARSEC
-# フィットは行わない（輪郭抽出まで）。
+# フィットは行わない（輪郭抽出まで）。出力は従来 picture_analysis と同じ
+# サブフォルダ構成（Gmarkers/ warp/ rotate/ Redge/ plot/ ＋ control.csv）。
 #
 # 【実行方法】
-#   cd <実験フォルダ>          ← photo/ が存在する場所
-#   python <repo>/post_process/extract_airfoil.py
-#     - 既定では ./photo を読み、./airfoil に結果を出力する
-#     - run_postprocess.m から y/n で呼び出すこともできる
-#
-#   python extract_airfoil.py --photo_dir D:/.../photo --out D:/.../airfoil --debug
+#   python <repo>/post_process/picture_analysis.py --photo_dir <picture/photo> --out <picture>
+#     - run_postprocess.m から y/n で呼び出される（既定で picture/photo→picture）
+#     - 単体実行時は cd <実験フォルダ> で ./picture/photo を自動検出
 #
 # 【入力】
-#   photo/<label><shot>.JPG   label=0deg / p<N>deg / m<N>deg, shot=1..3
-#                             （従来式の <label>.JPG = 1枚 も処理可）
-#   naca0012.csv              参照翼型（本スクリプトと同じフォルダに同梱）
+#   <picture>/photo/<label><shot>.JPG  label=0deg / p<N>deg / m<N>deg, shot=1..3
+#                                      （従来式の <label>.JPG = 1枚 も処理可）
+#   <picture>/control.csv  任意。迎角ごとの HSV 閾値・flag（無ければ既定を自動生成）
+#   naca0012.csv           参照翼型（本スクリプトと同じフォルダに同梱）
 #
-# 【出力（既定 ./airfoil/）】
-#   contour/<label>.csv       3枚平均した正規化輪郭（x/c, y/c, 閉曲線）
-#   contour/<label>.png       平均輪郭 + NACA0012 重ね描き
-#   shots/<label><shot>.csv   各写真の正規化輪郭（ばらつき確認用）
-#   overlay_all.png           全迎角の平均輪郭を重ねた図
-#   debug/ (--debug 時)       緑マスク・射影・回転・エッジの中間画像（HSV調整用）
+# 【出力（<picture>/ の下）】
+#   Gmarkers/<tag>.png   緑マーカー検出マスク（tag=<label><shot>）
+#   warp/<tag>.png       射影変換後
+#   rotate/<tag>.png     迎角で回転後
+#   Redge/<tag>.png/.csv 赤エッジのマスク／輪郭点
+#   plot/<label>.csv     3枚平均した正規化輪郭（x/c, y/c, 閉曲線）
+#   plot/<label>.png     平均輪郭 + NACA0012 重ね描き
+#   plot/<label>_profile.csv  共通 x/c 上の上面・下面 y
+#   overlay_all.png      全迎角の平均輪郭を重ねた図
 
 from __future__ import annotations
 
@@ -317,8 +319,9 @@ def average_contours(contours):
 # ============================================================
 #  1枚処理
 # ============================================================
-def process_shot(path, aoa, hsv, rotate_offset, debug_dir=None, tag=""):
-    """1枚の写真から正規化輪郭を返す。失敗時 None。"""
+def process_shot(path, aoa, hsv, rotate_offset, out_dir, tag):
+    """1枚の写真を処理し、中間画像を Gmarkers/warp/rotate/Redge に保存して
+    正規化輪郭(Nx2)を返す。失敗時 None。"""
     img = cv2.imread(path)
     if img is None:
         print(f"  [警告] 画像を読めません: {path}")
@@ -339,43 +342,61 @@ def process_shot(path, aoa, hsv, rotate_offset, debug_dir=None, tag=""):
 
     norm = normalize_contour(contour_pts)
 
-    if debug_dir is not None:
-        os.makedirs(debug_dir, exist_ok=True)
-        cv2.imwrite(os.path.join(debug_dir, f"{tag}_1green.png"), gmask)
-        cv2.imwrite(os.path.join(debug_dir, f"{tag}_2warp.png"), warped)
-        cv2.imwrite(os.path.join(debug_dir, f"{tag}_3rotate.png"), rotated)
-        cv2.imwrite(os.path.join(debug_dir, f"{tag}_4redmask.png"), rmask)
+    # 中間生成物を従来構成の各サブフォルダに保存（HSV調整・検証用）
+    cv2.imwrite(os.path.join(out_dir, "Gmarkers", f"{tag}.png"), gmask)
+    cv2.imwrite(os.path.join(out_dir, "warp", f"{tag}.png"), warped)
+    cv2.imwrite(os.path.join(out_dir, "rotate", f"{tag}.png"), rotated)
+    cv2.imwrite(os.path.join(out_dir, "Redge", f"{tag}.png"), rmask)
+    np.savetxt(os.path.join(out_dir, "Redge", f"{tag}.csv"), contour_pts, delimiter=",")
     return norm
 
 
 # ============================================================
 #  HSV しきい値の読み込み（任意の override ファイル）
 # ============================================================
-def load_hsv_overrides(photo_dir, exp_dir):
-    """airfoil_control.csv があれば label -> HSV辞書 を返す（無ければ空）。
-    列は control.csv と同じ（name, ... のしきい値）。"""
+CONTROL_COLS = ["name", "flag", "AoA"] + list(DEFAULT_HSV.keys())
+
+
+def load_control(out_dir):
+    """control.csv があれば {label: hsv辞書} と {label: flag} を返す（無ければ空）。
+    列は従来 picture_analysis の control.csv と同じ。"""
     import csv
-    overrides = {}
-    for cand in (os.path.join(photo_dir, "airfoil_control.csv"),
-                 os.path.join(exp_dir, "airfoil_control.csv")):
-        if not os.path.isfile(cand):
-            continue
-        try:
-            with open(cand, newline="", encoding="utf-8-sig") as f:
-                for row in csv.DictReader(f):
-                    name = (row.get("name") or "").strip().lower()
-                    if not name:
-                        continue
-                    hsv = dict(DEFAULT_HSV)
-                    for k in DEFAULT_HSV:
-                        if row.get(k):
-                            hsv[k] = int(float(row[k]))
-                    overrides[name] = hsv
-            print(f"[HSV] override を読み込み: {cand}（{len(overrides)} 件）")
-        except (OSError, ValueError, KeyError) as e:
-            print(f"[HSV] override の読み込みに失敗（既定値を使用）: {e}")
-        break
-    return overrides
+    hsv_by, flag_by = {}, {}
+    path = os.path.join(out_dir, "control.csv")
+    if not os.path.isfile(path):
+        return hsv_by, flag_by
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                name = (row.get("name") or "").strip().lower()
+                if not name:
+                    continue
+                hsv = dict(DEFAULT_HSV)
+                for k in DEFAULT_HSV:
+                    if row.get(k) not in (None, ""):
+                        hsv[k] = int(float(row[k]))
+                hsv_by[name] = hsv
+                flag_by[name] = str(row.get("flag", "1")).strip() not in ("0", "")
+        print(f"[control] {path} を読み込み（{len(hsv_by)} 件）")
+    except (OSError, ValueError, KeyError) as e:
+        print(f"[control] 読み込み失敗（既定HSVを使用）: {e}")
+    return hsv_by, flag_by
+
+
+def write_default_control(out_dir, labels):
+    """control.csv が無ければ、検出した迎角ぶんの既定 control.csv を作る
+    （以後ユーザーが HSV を調整して再実行できる）。"""
+    import csv
+    path = os.path.join(out_dir, "control.csv")
+    if os.path.isfile(path):
+        return
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(CONTROL_COLS)
+        for lbl in labels:
+            w.writerow([lbl, 1, int(aoa_from_label(lbl))] +
+                       [DEFAULT_HSV[k] for k in DEFAULT_HSV])
+    print(f"[control] 既定の control.csv を作成しました: {path}")
 
 
 # ============================================================
@@ -418,25 +439,18 @@ def main() -> int:
                         help="出力フォルダ（既定: ./airfoil）")
     parser.add_argument("--rotate-offset", type=float, default=ROTATE_OFFSET_DEG,
                         help=f"迎角への回転補正[deg]（既定 {ROTATE_OFFSET_DEG}）")
-    parser.add_argument("--debug", action="store_true",
-                        help="中間画像（緑マスク・射影・回転・赤マスク）を出力")
     args = parser.parse_args()
 
     exp_dir = os.getcwd()
-    # 既定の入出力先。新構成(force_measurement/・post_process/)を優先し、
-    # 無ければ旧フラット構成(./photo, ./airfoil)にフォールバック。
+    # 既定の入出力先。新構成(picture/photo)を優先し、無ければ旧式(./photo)。
     if args.photo_dir:
         photo_dir = args.photo_dir
-    elif os.path.isdir(os.path.join(exp_dir, "force_measurement", "photo")):
-        photo_dir = os.path.join(exp_dir, "force_measurement", "photo")
+    elif os.path.isdir(os.path.join(exp_dir, "picture", "photo")):
+        photo_dir = os.path.join(exp_dir, "picture", "photo")
     else:
         photo_dir = os.path.join(exp_dir, "photo")
-    if args.out:
-        out_dir = args.out
-    elif os.path.isdir(os.path.join(exp_dir, "force_measurement")):
-        out_dir = os.path.join(exp_dir, "post_process", "airfoil")
-    else:
-        out_dir = os.path.join(exp_dir, "airfoil")
+    # 出力は photo/ の親（picture/）。各サブフォルダ(Gmarkers/…)はその直下に作る。
+    out_dir = args.out or os.path.dirname(os.path.abspath(photo_dir))
 
     if not os.path.isdir(photo_dir):
         print(f"[エラー] 写真フォルダがありません: {photo_dir}", file=sys.stderr)
@@ -457,23 +471,25 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    contour_dir = os.path.join(out_dir, "contour")
-    shots_dir = os.path.join(out_dir, "shots")
-    debug_dir = os.path.join(out_dir, "debug") if args.debug else None
-    os.makedirs(contour_dir, exist_ok=True)
-    os.makedirs(shots_dir, exist_ok=True)
-
-    hsv_overrides = load_hsv_overrides(photo_dir, exp_dir)
-    ref = load_reference()
+    # 従来構成と同じサブフォルダ
+    for sub in ("Gmarkers", "warp", "rotate", "Redge", "plot"):
+        os.makedirs(os.path.join(out_dir, sub), exist_ok=True)
+    plot_dir = os.path.join(out_dir, "plot")
 
     # 迎角順（負→正）に並べる
-    def sort_key(lbl):
-        return aoa_from_label(lbl)
-    labels = sorted(groups.keys(), key=sort_key)
+    labels = sorted(groups.keys(), key=aoa_from_label)
+
+    # control.csv（HSV閾値・flag）。無ければ既定を生成、あれば読み込んで上書き。
+    write_default_control(out_dir, labels)
+    hsv_overrides, flag_by = load_control(out_dir)
+    ref = load_reference()
 
     summary = []
     overlay = []   # (aoa, contour) for combined plot
     for label in labels:
+        if not flag_by.get(label, True):
+            print(f"=== {label}: flag=0 のためスキップ ===")
+            continue
         aoa = aoa_from_label(label)
         hsv = hsv_overrides.get(label, DEFAULT_HSV)
         shots = sorted(groups[label])
@@ -483,15 +499,13 @@ def main() -> int:
         for shot, path in shots:
             tag = f"{label}{shot}"
             try:
-                norm = process_shot(path, aoa, hsv, args.rotate_offset,
-                                    debug_dir=debug_dir, tag=tag)
+                norm = process_shot(path, aoa, hsv, args.rotate_offset, out_dir, tag)
             except Exception:
                 traceback.print_exc()
                 norm = None
             if norm is None:
                 print(f"  [スキップ] {os.path.basename(path)} の輪郭抽出に失敗")
                 continue
-            np.savetxt(os.path.join(shots_dir, f"{tag}.csv"), norm, delimiter=",")
             norms.append(norm)
             print(f"  [OK] {os.path.basename(path)}: {len(norm)} 点")
 
@@ -507,13 +521,13 @@ def main() -> int:
             continue
         closed, yu, yl = avg
 
-        csv_path = os.path.join(contour_dir, f"{label}.csv")
+        # plot/ に3枚平均の正規化輪郭・図・上下面分布を出力
+        csv_path = os.path.join(plot_dir, f"{label}.csv")
         np.savetxt(csv_path, closed, delimiter=",", header="x/c,y/c", comments="")
-        png_path = os.path.join(contour_dir, f"{label}.png")
-        plot_contour(png_path, closed, ref, f"AoA = {aoa:+.0f} deg", len(norms))
-        # 上下面の厚み分布も保存（解析用）
+        plot_contour(os.path.join(plot_dir, f"{label}.png"),
+                     closed, ref, f"AoA = {aoa:+.0f} deg", len(norms))
         prof = np.column_stack([X_STATIONS, yu, yl])
-        np.savetxt(os.path.join(contour_dir, f"{label}_profile.csv"), prof,
+        np.savetxt(os.path.join(plot_dir, f"{label}_profile.csv"), prof,
                    delimiter=",", header="x/c,y_upper,y_lower", comments="")
         print(f"  [保存] {csv_path}")
         summary.append((label, aoa, len(norms)))

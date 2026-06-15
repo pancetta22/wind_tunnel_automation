@@ -183,8 +183,7 @@ tree = [
     ("├ measurement_control/  計測機器の制御", C_MID_BLUE, True, Pt(12.5)),
     ("├ diagnostics/          点検・診断ツール", C_MID_BLUE, True, Pt(12.5)),
     ("├ leptrino/             6軸センサ通信",   C_MID_BLUE, True, Pt(12.5)),
-    ("├ post_process/         後処理（Python）", C_MID_BLUE, True, Pt(12.5)),
-    ("├ analysis/             結果の比較・分析", C_MID_BLUE, True, Pt(12.5)),
+    ("├ post_process/         後処理を一元化（力・写真・比較）", C_MID_BLUE, True, Pt(12.5)),
     ("└ manual/               このマニュアル",  C_MID_BLUE, True, Pt(12.5)),
 ]
 for i, (txt, col, bd, sz) in enumerate(tree):
@@ -201,9 +200,9 @@ groups = [
      ["機器制御・センサ通信・点検ツール。",
       "measurement_control / diagnostics / leptrino"]),
     ("🟣 後処理・分析", C_PURPLE, RGBColor(0xEE, 0xE7, 0xF6),
-     ["空力係数の算出と過去データとの比較。",
-      "post_process / analysis / manual",
-      "※生成される pptx は output_dir に保存"]),
+     ["力・写真・比較の後処理を post_process に集約。",
+      "post_process / manual",
+      "※出力は output_dir の各実験フォルダに保存"]),
 ]
 gy = Inches(1.25)
 for label, col, bg, lines in groups:
@@ -316,17 +315,17 @@ add_rect(slide, Inches(6.7), Inches(1.2), Inches(6.23), Inches(5.8),
          fill=C_WHITE, border=C_ROW_BORDER, border_w=Pt(1))
 add_text(slide, "post_process/", Inches(6.9), Inches(1.32), Inches(5.8), Inches(0.4),
          font_size=Pt(17), bold=True, color=C_MID_BLUE)
-add_text(slide, "計測データ → 風速・空力係数・グラフ（64bit Python）",
+add_text(slide, "後処理を一元化：力・写真・比較（64bit Python）",
          Inches(6.9), Inches(1.74), Inches(5.9), Inches(0.32),
          font_size=Pt(12), color=C_GRAYTXT)
 file_table(slide, [
-    ("make_windspeed.py", "差圧電圧 → 風速 windspeed.csv"),
-    ("calc_force.py",     "6軸力 → 空力係数 C_aero.csv・グラフPNG"),
-    ("extract_airfoil.py","翼の写真 → 翼型輪郭(x/c,y/c)・3枚平均"),
-    ("requirements.txt",  "必要 Python パッケージ一覧"),
-    ("venv/",             "自動生成される仮想環境（Git管理外）"),
+    ("force_measurement.py", "力の後処理 入口（風速→空力係数）"),
+    ("picture_analysis.py",  "写真の後処理 入口（翼型輪郭・3枚平均）"),
+    ("make_comparison.py",   "過去剛体翼との比較パワポ生成"),
+    ("make_windspeed/calc_force.py", "力後処理のワーカ"),
+    ("assets/ ・ venv/",     "比較の同梱資産 ／ 仮想環境（Git管理外）"),
 ], Inches(6.85), Inches(2.2), Inches(5.95), Inches(3.7), C_MID_BLUE,
-   row_h=Inches(0.56), name_size=Pt(12))
+   row_h=Inches(0.56), name_size=Pt(11.5))
 note_bar(slide, "⚙ 自動実行",
          ["run_experiment 完了時に venv 構築から自動。",
           "失敗時は run_postprocess('…') で再実行。"],
@@ -334,27 +333,27 @@ note_bar(slide, "⚙ 自動実行",
 
 
 # ============================================================
-#  スライド 7: analysis/
+#  スライド 7: 実験フォルダの出力構成（force/ ・ picture/）
 # ============================================================
 slide = prs.slides.add_slide(BLANK)
-slide_header(slide, "analysis/  — 結果の比較・分析",
-             "新システムの結果を過去の剛体翼データと比較（パワポ自動更新）")
-tag_box(slide, "🟣 rigid 実験で自動更新", Inches(10.3), Inches(0.25), C_PURPLE, Inches(2.7))
+slide_header(slide, "実験フォルダの出力構成",
+             "output_dir/<実験名>/ の中は force/（力計測）と picture/（写真）に分かれる")
+tag_box(slide, "🟣 すべて output_dir に保存", Inches(10.0), Inches(0.25), C_PURPLE, Inches(3.0))
 
 rows = [
-    ("update_aero_data.py",            "新実験の C_aero.csv を取り込み→比較パワポ再生成（これ1つでOK）"),
-    ("make_rigid_comparison_local.py", "比較パワポを生成する本体スクリプト"),
-    ("Windy新システムによる実験結果.pptx", "比較パワポ（成果物）。output_dir に出力・実験追加で自動更新"),
-    ("研究室MTGテンプレート.pptx",      "パワポの雛形（研究室フォーマット）"),
-    ("aero_data/",                     "各実験の空力係数データ C_aero.csv の置き場"),
-    ("archive/",                       "使い終わった単発スクリプト・旧パワポ・グラフ"),
+    ("<実験名>/<日付>_experiment_log.json", "気温・気圧・校正定数（実験フォルダ直下）"),
+    ("force/data/",        "生データ（6軸CSV・volt_summary・volt_raw）"),
+    ("force/analysis/",    "windspeed・C_aero・グラフ・zero_lift_report（calc_force 出力）"),
+    ("force/comparison/",  "過去剛体翼との比較パワポ（rigid 実験で y を選んだ時）"),
+    ("picture/photo/",     "翼模型の原画像（p1deg1.JPG …）"),
+    ("picture/plot/ ほか", "3枚平均の翼型輪郭・図（Gmarkers/warp/rotate/Redge も）"),
 ]
 file_table(slide, rows, Inches(0.4), Inches(1.3), Inches(12.53), Inches(3.95),
            C_PURPLE, row_h=Inches(0.66))
 
-note_bar(slide, "🟣 流れ",
-         ["実験名に rigid を含むと、後処理の最後に「過去データと比較しますか？」→ y で自動更新。",
-          "手動なら  python update_aero_data.py  （引数なしで config.json の output_dir を走査）。"],
+note_bar(slide, "🟣 比較パワポの作られ方",
+         ["実験名に rigid を含むと、後処理の最後に「過去データと比較しますか？」→ y で生成。",
+          "make_comparison.py が各実験の force/analysis/C_aero.csv と同梱の過去データを集約する。"],
          Inches(0.4), Inches(5.95), Inches(12.53), Inches(1.05), C_PURPLE, RGBColor(0xEE, 0xE7, 0xF6))
 
 
@@ -365,10 +364,10 @@ slide = prs.slides.add_slide(BLANK)
 slide_header(slide, "データの流れ", "計測から比較パワポまで、ファイルがどう生まれるか")
 
 flow = [
-    ("run_experiment.m", "MATLAB で実行\n4フェーズを自動計測", C_GREEN_LIGHT, C_GREEN),
-    ("force_measurement", "生データ\ndata/・写真・volt_summary・log", C_GRAY_BG, C_MID_BLUE),
-    ("post_process", "解析結果\nwindspeed・C_aero・図・airfoil", C_PROG_BG, C_MID_BLUE),
-    ("analysis", "比較パワポを output_dir へ\n（rigid 実験のみ）", RGBColor(0xEE, 0xE7, 0xF6), C_PURPLE),
+    ("run_experiment.m", "MATLAB で計測\nforce/data・picture/photo・log", C_GREEN_LIGHT, C_GREEN),
+    ("force_measurement.py", "force/analysis へ\nwindspeed・C_aero・図", C_PROG_BG, C_MID_BLUE),
+    ("picture_analysis.py", "picture/ へ\n翼型輪郭（3枚平均）", C_GRAY_BG, C_MID_BLUE),
+    ("make_comparison.py", "force/comparison へ\n比較パワポ（rigid のみ）", RGBColor(0xEE, 0xE7, 0xF6), C_PURPLE),
 ]
 bw, bh, gap = Inches(2.7), Inches(1.85), Inches(0.55)
 total = len(flow) * bw + (len(flow) - 1) * gap
@@ -386,9 +385,9 @@ for i, (ttl, body, bg, fg) in enumerate(flow):
         add_text(slide, "▶", x + bw, y + Inches(0.62), gap, Inches(0.6),
                  font_size=Pt(24), bold=True, color=C_MID_BLUE, align=PP_ALIGN.CENTER)
 
-note_bar(slide, "📁 実験フォルダの中身（output_dir/<実験名>/ … force_measurement と post_process に分離）",
-         ["force_measurement/ … data/（6軸CSV）・photo/（写真）・＊_volt_summary.csv・＊_experiment_log.json",
-          "post_process/ … windspeed.csv・C_aero.csv・＊.png（グラフ）・airfoil/（翼型輪郭）＝すべて後処理で生成"],
+note_bar(slide, "📁 実験フォルダの中身（output_dir/<実験名>/ … force と picture に分離・ログは直下）",
+         ["force/ … data/（生データ）・analysis/（windspeed・C_aero・図）・comparison/（比較pptx）",
+          "picture/ … photo/（写真）・Gmarkers/warp/rotate/Redge・plot/（3枚平均の翼型輪郭）"],
          Inches(0.4), Inches(4.05), Inches(12.53), Inches(1.15), C_MID_BLUE, C_PROG_BG)
 
 note_bar(slide, "🔁 後処理だけやり直したいとき",

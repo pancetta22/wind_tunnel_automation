@@ -1,6 +1,20 @@
 # 後処理スクリプト (post_process/)
 
-`run_experiment.m` で生成したデータから空力係数（Cl, Cd, Cm）を算出するスクリプト群。
+力計測・写真・過去データ比較の後処理を**すべてここに一元化**したスクリプト群。
+仮想環境（`venv/`）もここにのみ作る。出力はすべて `output_dir`（WindyData）の
+各実験フォルダに保存する。
+
+## 出力フォルダ構成（`output_dir/<実験名>/`）
+
+```
+<実験名>/
+├ <YYYYMMDD>_experiment_log.json   気温・気圧・校正定数（実験直下）
+├ force/
+│   ├ data/         生データ（6軸CSV・volt_summary・volt_raw）
+│   ├ analysis/     windspeed.csv・C_aero.csv・*.png・zero_lift_report.json
+│   └ comparison/   過去剛体翼との比較パワポ
+└ picture/          写真と翼型輪郭（photo/・Gmarkers/・…・plot/・control.csv）
+```
 
 ---
 
@@ -8,12 +22,14 @@
 
 | ファイル | 説明 |
 |---------|------|
-| `calc_force.py` | 6軸力データから空力係数を算出（既存スクリプト改修版） |
-| `make_windspeed.py` | 差圧電圧サマリー → `windspeed.csv` 変換スクリプト |
-| `extract_airfoil.py` | 翼模型の写真（`photo/`）→ 各迎角の翼型輪郭を抽出（3枚平均）|
-| `naca0012.csv` | 翼型輪郭抽出で重ね描きする参照翼型 |
-| `requirements.txt` | 必要 Python パッケージ一覧（venv 自動構築で使用） |
-| `venv/` | 自動生成される仮想環境（Git 管理外） |
+| `force_measurement.py` | **力の後処理 入口**。windspeed → calc_force を順に実行 |
+| `picture_analysis.py` | **写真の後処理 入口**。翼模型写真 → 翼型輪郭（3枚平均） |
+| `make_comparison.py` | 過去剛体翼との比較パワポを生成（WindyData を走査＋同梱過去分） |
+| `make_windspeed.py` | 差圧電圧サマリー → `windspeed.csv`（force_measurement が呼ぶ） |
+| `calc_force.py` | 6軸力 → 空力係数（force_measurement が呼ぶ） |
+| `naca0012.csv` | 翼型輪郭抽出の参照翼型 |
+| `assets/` | 比較の同梱資産（`aero_data/`＝過去データ・テンプレ pptx・`archive/`） |
+| `requirements.txt` / `venv/` | パッケージ一覧 / 自動生成される仮想環境（Git 管理外） |
 
 ---
 
@@ -24,11 +40,11 @@
 1. `post_process/venv` が無ければ **64bit Python**（`config.json` の `python_exe_64`）で
    自動作成し、`requirements.txt` のパッケージを自動インストール
    （venv が壊れていた場合は自動で作り直す）
-2. `make_windspeed.py` を実行 → `windspeed.csv` を `post_process/` に生成
-   （ρ は実験時に入力した気温・気圧から、電圧オフセットは Pofst 計測値から自動設定）
-3. `calc_force.py` を実行 → 空力係数 CSV・グラフ PNG を `post_process/` に生成
+2. `force_measurement.py` を実行 → `force/analysis/` に `windspeed.csv`・空力係数・グラフ
+   （ρ は実験時の気温・気圧から、電圧オフセットは Pofst 計測値から自動設定）
+3. 写真があれば「翼型輪郭も抽出しますか？」→ **y** で `picture_analysis.py` を実行
 4. 実験名に "rigid" を含む場合、「過去データと比較しますか？」→ **y** で
-   `analysis/` の比較パワポも自動更新
+   `make_comparison.py` が `force/comparison/` に比較パワポを生成
 
 片側のみの計測（正 or 負だけ）や、迎角範囲・刻み幅を変えた計測にも対応している。
 
@@ -47,23 +63,15 @@ run_postprocess('C:\Users\...\WindyData\260615_rigid')
 
 ### Python を直接叩きたい場合（上級者向け）
 
-新構成（`force_measurement/` と `post_process/` に分離）では、生データを
-`force_measurement/` から読み、結果を `post_process/` に書く：
+力の後処理は `force_measurement.py` に実験フォルダを渡すだけ
+（内部で make_windspeed → calc_force を正しいパスで実行する）：
 
 ```bat
-:: windspeed は force_measurement を読み post_process へ出力
-post_process\venv\Scripts\python post_process\make_windspeed.py ^
-    --volt_dir <実験フォルダ>\force_measurement --date YYYYMMDD ^
-    --out <実験フォルダ>\post_process
-:: calc_force は post_process をカレントにして実行（data/・log は ../force_measurement を自動参照）
-cd <実験フォルダ>\post_process
-<repo>\post_process\venv\Scripts\python <repo>\post_process\calc_force.py
+post_process\venv\Scripts\python post_process\force_measurement.py <実験フォルダ>
 ```
 
-（旧フラット構成の実験フォルダでは、従来どおり `--volt_dir <実験フォルダ>`・
-`--out <実験フォルダ>` とし、`calc_force.py` は実験フォルダ直下で実行する）
-
-（`--rho` 等は省略すると実験フォルダ内の experiment_log.json から自動取得）
+（旧フラット構成の実験フォルダ＝data/ と log が直下にある場合もそのまま動く。
+`--rho` 等は省略すると experiment_log.json から自動取得）
 
 | make_windspeed.py オプション | 必須 | 説明 |
 |-----------|:---:|------|
@@ -96,7 +104,7 @@ k [Pa/mV] = U² × ρ / (2 × V)
 
 ---
 
-## 出力ファイル（`<実験フォルダ>/post_process/` に生成）
+## 出力ファイル（`<実験フォルダ>/force/analysis/` に生成）
 
 | 出力ファイル | 内容 |
 |------------|------|
@@ -114,12 +122,12 @@ k [Pa/mV] = U² × ρ / (2 × V)
 
 ---
 
-## 翼型輪郭の抽出（`extract_airfoil.py`）
+## 翼型輪郭の抽出（`picture_analysis.py`）
 
-実験中に翼模型を撮影した場合（`run_experiment` の写真撮影を有効化）、`photo/` の
-画像から各迎角の翼型輪郭（x/c, y/c）を抽出できる。従来の
-`windtunnel_picture_analysis/extract_airfoil4.py` の輪郭抽出部分
-（緑マーカー検出 → 射影変換 → 迎角で回転 → 赤エッジ抽出 → 翼弦長で正規化）を移植。
+実験中に翼模型を撮影した場合、`picture/photo/` の画像から各迎角の翼型輪郭
+（x/c, y/c）を抽出する。従来の `windtunnel_picture_analysis/extract_airfoil4.py`
+の輪郭抽出部分（緑マーカー検出 → 射影変換 → 迎角で回転 → 赤エッジ抽出 → 翼弦長で
+正規化）を移植。出力は従来 picture_analysis と同じサブフォルダ構成。
 **1迎角3枚の写真は輪郭を平均して1本にまとめる**（PARSEC フィットは行わない）。
 
 ```matlab
@@ -128,30 +136,28 @@ run_postprocess('C:\Users\...\WindyData\260615_rigid')
 ```
 
 ```bat
-:: 単体実行（既定で ./photo を読み ./airfoil に出力）
-cd <実験フォルダ>
-post_process\venv\Scripts\python <repo>\post_process\extract_airfoil.py
-:: 中間画像を見て HSV を調整したいとき
-... extract_airfoil.py --debug
+:: 単体実行（picture/photo を読み picture/ 配下に出力）
+post_process\venv\Scripts\python <repo>\post_process\picture_analysis.py ^
+    --photo_dir <実験フォルダ>\picture\photo --out <実験フォルダ>\picture
 ```
 
 | 入力 | 内容 |
 |------|------|
-| `force_measurement/photo/<label><shot>.JPG` | `0deg1.JPG`, `p1deg1.JPG`, `m1deg1.JPG` …（従来式 `<label>.JPG` も可）|
+| `picture/photo/<label><shot>.JPG` | `0deg1.JPG`, `p1deg1.JPG`, `m1deg1.JPG` …（従来式 `<label>.JPG` も可）|
 | `naca0012.csv` | 参照翼型（本フォルダに同梱）|
-| `force_measurement/photo/airfoil_control.csv` | 任意。迎角ごとに HSV 閾値を上書き（列は従来 `control.csv` と同じ）|
+| `picture/control.csv` | 迎角ごとの HSV 閾値・flag（無ければ既定を自動生成。編集して再実行で調整）|
 
-| 出力（`<実験フォルダ>/post_process/airfoil/`）| 内容 |
+| 出力（`<実験フォルダ>/picture/`）| 内容 |
 |------|------|
-| `contour/<label>.csv` | 3枚平均した正規化輪郭（x/c, y/c）|
-| `contour/<label>.png` | 平均輪郭 + NACA0012 重ね描き |
-| `contour/<label>_profile.csv` | 共通 x/c 上の上面・下面 y |
-| `shots/<label><shot>.csv` | 各写真の輪郭（ばらつき確認用）|
+| `Gmarkers/ warp/ rotate/ Redge/` | 各処理ステップの中間画像（`<label><shot>`）|
+| `plot/<label>.csv` | 3枚平均した正規化輪郭（x/c, y/c）|
+| `plot/<label>.png` | 平均輪郭 + NACA0012 重ね描き |
+| `plot/<label>_profile.csv` | 共通 x/c 上の上面・下面 y |
 | `overlay_all.png` | 全迎角の輪郭を重ねた図 |
-| `debug/` | `--debug` 時のみ（緑マスク・射影・回転・赤マスク）|
 
-> 照明等で輪郭がうまく出ない場合は `--debug` で中間画像を確認し、`airfoil_control.csv`
-> で HSV を調整する。回転補正は従来 +1°（`--rotate-offset` で変更可）。
+> 照明等で輪郭がうまく出ない場合は中間画像（Gmarkers/ など）を確認し、
+> `picture/control.csv` の HSV を編集して再実行する（`flag`=0 の迎角はスキップ）。
+> 回転補正は従来 +1°（`--rotate-offset` で変更可）。
 
 ---
 

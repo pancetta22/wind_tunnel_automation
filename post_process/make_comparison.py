@@ -38,24 +38,43 @@ from pptx.oxml.ns import qn as _qn
 
 # ─── 定数 ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
-BASE          = os.path.join(SCRIPT_DIR, "aero_data")   # 各実験 C_aero.csv の置き場
-TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "研究室MTGテンプレート.pptx")
+# 過去（新システム前など）の剛体翼データは assets/aero_data に同梱（比較の基準）。
+BASE          = os.path.join(SCRIPT_DIR, "assets", "aero_data")
+TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "assets", "研究室MTGテンプレート.pptx")
 
-def _output_dir():
-    """config.json の output_dir を返す。無ければ SCRIPT_DIR にフォールバック。"""
+
+def _config_output_dir():
+    """config.json の output_dir を返す（無ければ空文字）。"""
     config_path = os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
     try:
         with open(config_path, encoding="utf-8") as f:
-            d = json.load(f)
-        out = d.get("output_dir", "")
-        if out:
-            os.makedirs(out, exist_ok=True)
+            out = json.load(f).get("output_dir", "")
+        if out and os.path.isdir(out):
             return out
     except (OSError, json.JSONDecodeError):
         pass
-    return SCRIPT_DIR
+    return ""
 
-OUT = os.path.join(_output_dir(), "Windy新システムによる実験結果.pptx")
+
+# 出力先 pptx。--out で実験の force/comparison/ を指定する想定。
+# 省略時は config.json の output_dir 直下に置く（無ければ SCRIPT_DIR）。
+_args_out = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--out" and _i + 1 < len(sys.argv):
+        _args_out = sys.argv[_i + 1]
+    elif _a == "--scan" and _i + 1 < len(sys.argv):
+        pass   # 後段の SCAN_DIR で処理
+_scan_arg = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--scan" and _i + 1 < len(sys.argv):
+        _scan_arg = sys.argv[_i + 1]
+
+OUT_DIR = _args_out or _config_output_dir() or SCRIPT_DIR
+os.makedirs(OUT_DIR, exist_ok=True)
+OUT = os.path.join(OUT_DIR, "Windy新システムによる実験結果.pptx")
+
+# WindyData 走査元（新実験の force/analysis/C_aero.csv を取り込む）
+SCAN_DIR = _scan_arg or _config_output_dir()
 
 SLIDE_W = Inches(10.0)
 SLIDE_H = Inches(7.5)
@@ -141,52 +160,73 @@ EXCLUDE_DIRS = {
     "force_meausrement_260610_rigid",   # typo名（修正済み 260610_rigid と同内容の再同期を防ぐ）
 }
 
-# ─── aero_data 内の未登録フォルダを自動追加 ──────────────────────────────────────
-#  今後 update_aero_data.py で aero_data/ に新しい rigid 実験の C_aero.csv が
-#  追加されると、ここで自動的に DATASETS へ取り込まれ、表・全図に反映される。
-#  （既存の登録済み13件はそのままのスタイル・解説を維持）
+# ─── 未登録フォルダを自動追加 ────────────────────────────────────────────────
+#  (1) 同梱の過去データ assets/aero_data、(2) WindyData(SCAN_DIR) の各実験
+#  force/analysis/C_aero.csv を走査し、未登録のものを自動で DATASETS に取り込む。
+#  新システムで計測・後処理した rigid 実験は、ここで自動的に表・全図に反映される。
+#  （既存の登録済みデータはそのままのスタイル・解説を維持）
 #  自動追加データは who="new"（新システム・新規）として扱い、緑〜青緑系の色を割当てる。
-#  who="new" は揚力傾斜−過去平均スライドの new_keys にも含めるため、表・全図に加え
-#  「過去平均との差」グラフにも自動で反映される（過去平均の母集団は who=="old" のみ）。
+#  who="new" は揚力傾斜−過去平均スライドの new_keys にも含まれる
+#  （過去平均の母集団は who=="old" のみ）。
 import re as _re
 _known_paths = {os.path.normpath(v["path"]) for v in DATASETS.values()}
+_known_names = set(DATASETS.keys())
 _auto_palette = ["#16A085", "#27AE60", "#2ECC71", "#1ABC9C", "#138D75",
                  "#52BE80", "#45B39D", "#229954", "#117A65", "#0E6655"]
 _auto_markers = ["o", "s", "^", "D", "v", "p", "X", "h", "<", ">"]
 _ai = 0
+
+
+def _disp_name(sub):
+    """フォルダ名 → 表示名（数字のみ）。typo 綴り force_meausrement_ も吸収し、
+    末尾 "_rigid" は除去、"_rigid2" 等の連番は ②③… に変換（例 260611_rigid2 → 260611②）。"""
+    d = sub.replace("force_measurement_", "").replace("force_meausrement_", "")
+    mn = _re.search(r"_rigid(\d+)$", d)
+    if mn:
+        n = int(mn.group(1))
+        return d[:mn.start()] + (chr(0x245F + n) if 1 <= n <= 20 else f"_{n}")
+    return _re.sub(r"_rigid$", "", d)
+
+
+def _try_add(sub, ca):
+    """未登録の (フォルダ名, C_aero パス) を新システム実験として DATASETS に追加。"""
+    global _ai
+    if sub in EXCLUDE_DIRS or sub in _known_names:
+        return
+    if not os.path.isfile(ca) or os.path.normpath(ca) in _known_paths:
+        return
+    m = _re.search(r"(\d{6})", sub)
+    date = f"20{m.group(1)[:2]}-{m.group(1)[2:4]}-{m.group(1)[4:]}" if m else "—"
+    DATASETS[sub] = {"path": ca,
+                     "color":  _auto_palette[_ai % len(_auto_palette)],
+                     "marker": _auto_markers[_ai % len(_auto_markers)],
+                     "date":   date, "who": "new"}
+    DISP_NAMES[sub] = _disp_name(sub)
+    ROW_INFO.append((DISP_NAMES[sub], "new"))
+    _known_names.add(sub)
+    _known_paths.add(os.path.normpath(ca))
+    _ai += 1
+
+
+# (1) 同梱の過去データ（assets/aero_data）内の未登録フォルダを取り込む
 if os.path.isdir(BASE):
     for _sub in sorted(os.listdir(BASE)):
-        if _sub in EXCLUDE_DIRS:
+        _try_add(_sub, os.path.join(BASE, _sub, "C_aero.csv"))
+
+# (2) WindyData（SCAN_DIR）の各実験 force/analysis/C_aero.csv を取り込む
+#     新システムで計測・後処理した実験は、ここで自動的に比較へ反映される。
+if SCAN_DIR and os.path.isdir(SCAN_DIR):
+    for _sub in sorted(os.listdir(SCAN_DIR)):
+        if "rigid" not in _sub.lower():
             continue
-        _ca = os.path.join(BASE, _sub, "C_aero.csv")
+        _ca = os.path.join(SCAN_DIR, _sub, "force", "analysis", "C_aero.csv")
         if not os.path.isfile(_ca):
-            continue
-        if os.path.normpath(_ca) in _known_paths:
-            continue
-        _m    = _re.search(r"(\d{6})", _sub)
-        _date = f"20{_m.group(1)[:2]}-{_m.group(1)[2:4]}-{_m.group(1)[4:]}" if _m else "—"
-        DATASETS[_sub]   = {"path": _ca,
-                            "color":  _auto_palette[_ai % len(_auto_palette)],
-                            "marker": _auto_markers[_ai % len(_auto_markers)],
-                            "date":   _date, "who": "new"}
-        # フォルダ名 → 表示名（数字のみ。typo 綴り force_meausrement_ も吸収。
-        #   末尾の "_rigid" は除去し、"_rigid2" 等の連番は ②③… に変換して
-        #   同日複数回の実験を区別する。例: 260611_rigid2 → 260611②）
-        _disp = (_sub.replace("force_measurement_", "")
-                     .replace("force_meausrement_", ""))
-        _mn = _re.search(r"_rigid(\d+)$", _disp)
-        if _mn:
-            _n = int(_mn.group(1))
-            _disp = _disp[:_mn.start()] + (chr(0x245F + _n) if 1 <= _n <= 20 else f"_{_n}")
-        else:
-            _disp = _re.sub(r"_rigid$", "", _disp)
-        DISP_NAMES[_sub] = _disp
-        ROW_INFO.append((_disp, "new"))
-        _ai += 1
+            _ca = os.path.join(SCAN_DIR, _sub, "C_aero.csv")   # 旧フラット互換
+        _try_add(_sub, _ca)
 BG_COLOR.setdefault("new", RGBColor(0xDD, 0xF5, 0xE8))   # 淡い緑（新システム新規）
 NOTE_STR.setdefault("new", "（新システム・新規）")
 if _ai:
-    print(f"[自動追加] aero_data 内の未登録 {_ai} 件を取り込みました。")
+    print(f"[自動追加] 未登録の剛体翼データ {_ai} 件を比較に取り込みました。")
 
 # ─── データ読み込み ───────────────────────────────────────────────────────────
 def load(info):
@@ -462,7 +502,7 @@ r_max = ymax - ymean
 
 # 重ねる新システムデータ＝接触不良修正後(fixed)＋今後の新規(new)。
 #   接触不良(new_fault)は既知の異常なので帯比較からは除外する。
-#   → update_aero_data.py で aero_data に新実験が増えると who="new" で自動追加され、
+#   → WindyData に新しい rigid 実験が増えると who="new" で自動追加され、
 #     このスライドにも自動で重なる。
 overlay_keys = [k for k in labels if DATASETS[k]["who"] in ("fixed", "new")]
 

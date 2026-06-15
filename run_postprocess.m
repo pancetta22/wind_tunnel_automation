@@ -5,9 +5,10 @@ function run_postprocess(exp_dir, cfg)
 %  使い方（後処理だけやり直したい時・過去実験を再処理したい時）:
 %      run_postprocess('C:\Users\...\WindyData\260615_rigid')
 %
-%   - 気温・気圧・校正値は実験フォルダ内の experiment_log.json から自動で読む
+%   - 気温・気圧・校正値は実験フォルダ直下の experiment_log.json から自動で読む
 %   - post_process/venv が無い・壊れている場合は自動で作成・修復する
-%   - 実験名に "rigid" を含む場合は過去データとの比較（analysis/ のパワポ更新）も選べる
+%   - 写真があれば翼型輪郭の抽出（picture/）も y/n で選べる
+%   - 実験名に "rigid" を含む場合は過去データとの比較（force/comparison/ に出力）も選べる
 %
 %  ※ run_experiment の実験完了時にも、この関数が内部的に呼ばれる（後処理の本体）。
 
@@ -30,25 +31,13 @@ end
 if ~isfield(cfg, 'python_exe_64'), cfg.python_exe_64 = ''; end
 if ~isfield(cfg, 'python_exe'),    cfg.python_exe    = ''; end
 
-% --- 出力構成の解決（新: force_measurement/・post_process/ に分離）---------
-%   新構成: 生データは exp_dir/force_measurement、解析結果は exp_dir/post_process
-%   旧構成(フラット): どちらも exp_dir（過去実験の再処理に対応）
-[fm_dir, pp_dir] = resolve_layout_(exp_dir);
+% --- 解析結果・比較・写真の各フォルダ（新構成 force/・picture/ / 旧フラット）---
+[analysis_dir, comparison_dir, photo_dir] = resolve_layout_(exp_dir);
 
-% --- 実験日の特定（experiment_log.json のファイル名から）------------------
-logs = dir(fullfile(fm_dir, '*_experiment_log.json'));
-if isempty(logs)
-    error(['experiment_log.json が見つかりません: %s\n' ...
-           '  run_experiment で計測した実験フォルダを指定してください。'], fm_dir);
-end
-[~, newest] = max([logs.datenum]);   % 複数日にまたがる場合は最新を使う
-date_str = regexp(logs(newest).name, '^\d{8}', 'match', 'once');
-if isempty(date_str)
-    error('experiment_log.json の名前から実験日を判定できません: %s', logs(newest).name);
-end
-
-make_ws_path = fullfile(root, 'post_process', 'make_windspeed.py');
-calc_f_path  = fullfile(root, 'post_process', 'calc_force.py');
+% 後処理スクリプト（すべて post_process/ に一元化）
+fm_path  = fullfile(root, 'post_process', 'force_measurement.py');
+pic_path = fullfile(root, 'post_process', 'picture_analysis.py');
+cmp_path = fullfile(root, 'post_process', 'make_comparison.py');
 
 % --- Step 0: 仮想環境の準備 ----------------------------------------------
 py64 = cfg.python_exe_64;
@@ -59,58 +48,42 @@ if isempty(py64)
 end
 venv_python = setup_postprocess_venv_(root, py64);
 
-% --- Step 1: windspeed.csv 生成（生データ=fm_dir を読み、結果=pp_dir へ）----
-fprintf('[後処理 1/2] windspeed.csv を生成中...\n');
-cmd_ws = sprintf('"%s" "%s" --volt_dir "%s" --date %s --out "%s"', ...
-    venv_python, make_ws_path, fm_dir, date_str, pp_dir);
-[st1, out1] = system(cmd_ws);
+% --- Step 1: 力計測の後処理（windspeed → 空力係数・グラフ）-----------------
+%   force_measurement.py が make_windspeed と calc_force を順に実行し、
+%   結果を force/analysis/ に出力する（旧フラット構成は実験フォルダ直下）。
+fprintf('[後処理] 力データを処理中（windspeed → 空力係数）...\n');
+[st1, out1] = system(sprintf('"%s" "%s" "%s"', venv_python, fm_path, exp_dir));
 if ~isempty(strtrim(out1)), fprintf('%s\n', out1); end
 if st1 ~= 0
-    fprintf('[警告] make_windspeed.py に失敗しました（終了コード %d）。後処理を中断します。\n\n', st1);
+    fprintf('[警告] force_measurement.py に失敗しました（終了コード %d）。後処理を中断します。\n\n', st1);
     return
 end
+fprintf('[後処理完了] 空力データを %s に保存しました。\n\n', analysis_dir);
 
-% --- Step 2: calc_force.py で空力係数・グラフ生成 -------------------------
-%   解析結果フォルダ(pp_dir)をカレントにして実行する。calc_force は data/ と
-%   experiment_log を ../force_measurement から読み、出力は pp_dir に書く。
-fprintf('[後処理 2/2] 空力係数を計算・グラフを出力中...\n');
-prev_dir = cd(pp_dir);
-restore_dir = onCleanup(@() cd(prev_dir));   % エラーでも元のフォルダへ戻す
-[st2, out2] = system(sprintf('"%s" "%s"', venv_python, calc_f_path));
-clear restore_dir   % ここで cd(prev_dir) が走る
-if ~isempty(strtrim(out2)), fprintf('%s\n', out2); end
-if st2 ~= 0
-    fprintf('[警告] calc_force.py に失敗しました（終了コード %d）。\n\n', st2);
-    return
-end
+% --- Step 2: ゼロ揚力角からの原点パルス修正（確認の上で config.json を更新）---
+prompt_origin_pulse_update_(analysis_dir, fullfile(root, 'config.json'));
 
-fprintf('[後処理完了] グラフを %s に保存しました。\n\n', pp_dir);
+% --- Step 3: 翼模型の写真から翼型輪郭を抽出（picture/photo がある時のみ・確認の上で）---
+prompt_picture_analysis_(photo_dir, venv_python, pic_path);
 
-% --- Step 2.5: ゼロ揚力角からの原点パルス修正（確認の上で config.json を更新）---
-prompt_origin_pulse_update_(pp_dir, fullfile(root, 'config.json'));
-
-% --- Step 2.6: 翼模型の写真から翼型輪郭を抽出（photo/ がある時のみ・確認の上で）---
-prompt_extract_airfoil_(fm_dir, pp_dir, venv_python, fullfile(root, 'post_process', 'extract_airfoil.py'));
-
-% --- Step 3: 過去データとの比較（rigid 実験のみ・確認の上で実行）-----------
+% --- Step 4: 過去データとの比較（rigid 実験のみ・確認の上で実行）-----------
 [~, exp_name] = fileparts(exp_dir);
 if contains(lower(exp_name), 'rigid')
     ans_cmp = input('過去データと比較しますか？ [y/n]: ', 's');
     if any(strcmpi(strtrim(ans_cmp), {'y', 'yes'}))
-        updater = fullfile(root, 'analysis', 'update_aero_data.py');
-        if ~isfile(updater)
-            fprintf('[比較] update_aero_data.py が見つかりません: %s\n\n', updater);
+        if ~isfile(cmp_path)
+            fprintf('[比較] make_comparison.py が見つかりません: %s\n\n', cmp_path);
             return
         end
-        % 実験フォルダの親を探索元として、空力データ同期＋パワポ再生成
-        % （venv セットアップで python-pptx 含む必要モジュールは導入済み）
-        src_parent = fileparts(exp_dir);
-        fprintf('[比較] 過去データと比較し、比較パワポを更新します...\n');
-        [stc, outc] = system(sprintf('"%s" "%s" "%s"', ...
-            venv_python, updater, src_parent));
+        % WindyData(output_dir) の各実験 force/analysis/C_aero.csv を走査し、
+        % 同梱の過去データと合わせて比較パワポを comparison_dir に出力する。
+        if ~isfolder(comparison_dir), mkdir(comparison_dir); end
+        fprintf('[比較] 過去データと比較し、比較パワポを生成します...\n');
+        [stc, outc] = system(sprintf('"%s" "%s" --scan "%s" --out "%s"', ...
+            venv_python, cmp_path, cfg.output_dir, comparison_dir));
         if ~isempty(strtrim(outc)), fprintf('%s\n', outc); end
         if stc == 0
-            fprintf('[比較完了] 比較パワポを更新しました（保存先: %s）。\n\n', cfg.output_dir);
+            fprintf('[比較完了] 比較パワポを %s に保存しました。\n\n', comparison_dir);
         else
             fprintf('[比較] 失敗しました（終了コード %d）。\n\n', stc);
         end
@@ -219,27 +192,27 @@ function txt = read_text_utf8_(path)
 end
 
 
-function [fm_dir, pp_dir] = resolve_layout_(exp_dir)
-    % 出力構成を解決する。
-    %   新構成: exp_dir/force_measurement（生データ）と exp_dir/post_process（解析結果）
-    %   旧構成(フラット): どちらも exp_dir（過去実験の再処理に対応）
-    % 判定は force_measurement/ の有無で行い、新構成なら post_process/ を作る。
-    fm_new = fullfile(exp_dir, 'force_measurement');
-    if isfolder(fm_new)
-        fm_dir = fm_new;
-        pp_dir = fullfile(exp_dir, 'post_process');
-        if ~isfolder(pp_dir), mkdir(pp_dir); end
+function [analysis_dir, comparison_dir, photo_dir] = resolve_layout_(exp_dir)
+    % 出力構成を解決して (analysis_dir, comparison_dir, photo_dir) を返す。
+    %   新構成: exp_dir/force/{data,analysis,comparison} と exp_dir/picture/photo
+    %   旧構成(フラット): analysis/comparison は exp_dir、写真は exp_dir/photo
+    % 判定は force/data の有無で行う。
+    if isfolder(fullfile(exp_dir, 'force', 'data'))
+        analysis_dir   = fullfile(exp_dir, 'force', 'analysis');
+        comparison_dir = fullfile(exp_dir, 'force', 'comparison');
+        photo_dir      = fullfile(exp_dir, 'picture', 'photo');
+        if ~isfolder(analysis_dir), mkdir(analysis_dir); end
     else
-        fm_dir = exp_dir;
-        pp_dir = exp_dir;
+        analysis_dir   = exp_dir;
+        comparison_dir = exp_dir;
+        photo_dir      = fullfile(exp_dir, 'photo');
     end
 end
 
 
-function prompt_extract_airfoil_(fm_dir, pp_dir, venv_python, extract_script)
-    % photo/ に翼模型の写真があれば、翼型輪郭を抽出するか y/n で確認して実行する。
-    %  各迎角3枚の写真から輪郭を抽出・平均し、pp_dir/airfoil/ に出力する。
-    photo_dir = fullfile(fm_dir, 'photo');
+function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
+    % picture/photo に写真があれば、翼型輪郭を抽出するか y/n で確認して実行する。
+    %  各迎角3枚の写真から輪郭を抽出・平均し、picture/ 配下に出力する。
     if ~isfolder(photo_dir)
         return   % 写真を撮っていない実験 → 何もしない
     end
@@ -247,16 +220,17 @@ function prompt_extract_airfoil_(fm_dir, pp_dir, venv_python, extract_script)
     if isempty(imgs)
         return
     end
-    if ~isfile(extract_script)
-        fprintf('[輪郭抽出] extract_airfoil.py が見つかりません: %s\n\n', extract_script);
+    if ~isfile(pic_script)
+        fprintf('[輪郭抽出] picture_analysis.py が見つかりません: %s\n\n', pic_script);
         return
     end
 
-    fprintf('[輪郭抽出] photo/ に写真が %d 枚あります。\n', numel(imgs));
+    picture_dir = fileparts(photo_dir);   % picture/photo の親 = picture/
+    fprintf('[輪郭抽出] picture/photo に写真が %d 枚あります。\n', numel(imgs));
     ans_ex = strtrim(input('翼型輪郭も抽出しますか？（緑マーカー→射影→赤エッジ→正規化） [y/n]: ', 's'));
     if ~any(strcmpi(ans_ex, {'y', 'yes'}))
-        fprintf('  → 抽出しませんでした（後で実行: python extract_airfoil.py --photo_dir "%s" --out "%s"）\n\n', ...
-                photo_dir, fullfile(pp_dir, 'airfoil'));
+        fprintf('  → 抽出しませんでした（後で実行: python picture_analysis.py --photo_dir "%s" --out "%s"）\n\n', ...
+                photo_dir, picture_dir);
         return
     end
 
@@ -269,17 +243,15 @@ function prompt_extract_airfoil_(fm_dir, pp_dir, venv_python, extract_script)
         if ~isempty(strtrim(out_pip)), fprintf('%s\n', out_pip); end
     end
 
-    % 入力(写真)と出力(airfoil)のフォルダを明示して実行
-    airfoil_out = fullfile(pp_dir, 'airfoil');
     fprintf('[輪郭抽出] 翼型輪郭を抽出中...\n');
     [st_ex, out_ex] = system(sprintf('"%s" "%s" --photo_dir "%s" --out "%s"', ...
-        venv_python, extract_script, photo_dir, airfoil_out));
+        venv_python, pic_script, photo_dir, picture_dir));
     if ~isempty(strtrim(out_ex)), fprintf('%s\n', out_ex); end
     if st_ex == 0
-        fprintf('[輪郭抽出完了] %s に保存しました。\n\n', airfoil_out);
+        fprintf('[輪郭抽出完了] %s に保存しました。\n\n', picture_dir);
     else
         fprintf('[輪郭抽出] 失敗しました（終了コード %d）。\n', st_ex);
-        fprintf('  HSV閾値の調整が必要な場合があります（--debug で中間画像を確認できます）。\n\n');
+        fprintf('  HSV閾値の調整が必要な場合があります（picture/control.csv で調整）。\n\n');
     end
 end
 

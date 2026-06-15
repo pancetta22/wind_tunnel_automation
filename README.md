@@ -115,15 +115,22 @@ Windy/
 │   ├── lumix_check_connection.py   # カメラ接続確認
 │   └── lumix_capture.py            # シャッター制御＋画像DL（実験中の翼撮影）
 │
-├── manual/                     # 操作マニュアルと生成スクリプト
-│   └── make_manual_pptx.py     #   （pptx は output_dir に出力）
-│
 ├── leptrino/                   # Leptrinoセンサ 計測スクリプト（Python）
 │   ├── leptrino_server.py
 │   └── CfsUsb.dll              #   Leptrino USB ドライバ DLL（32bit）
-├── post_process/               # 後処理（風速・空力係数・グラフ・翼型輪郭抽出）
-└── analysis/                   # 分析・比較パワポ（自動更新）
+├── post_process/               # 後処理を全て一元化（venvもここ）
+│   ├── force_measurement.py    #   力の後処理 入口（windspeed→空力係数）
+│   ├── picture_analysis.py     #   写真の後処理 入口（翼型輪郭抽出）
+│   ├── make_comparison.py      #   過去剛体翼との比較パワポ生成
+│   ├── make_windspeed.py / calc_force.py  #   力後処理のワーカ
+│   ├── naca0012.csv            #   輪郭抽出の参照翼型
+│   └── assets/                 #   比較の同梱資産（過去データ・テンプレpptx）
+└── manual/                     # 操作マニュアルと生成スクリプト
+    └── make_manual_pptx.py     #   （pptx は output_dir に出力）
 ```
+
+> 後処理の出力は `output_dir`（WindyData）の各実験フォルダに保存されます
+> （`force/`＝力計測、`picture/`＝写真、ログは実験フォルダ直下）。
 
 > ※ **本計測（`run_experiment`）はそのまま実行できます**（起動時に自分で
 > `measurement_control` をパスに追加します）。

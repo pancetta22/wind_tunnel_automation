@@ -66,25 +66,40 @@ def angle_from_name(name, sign):
 PULSE_PER_DEG = 250     # pulse per degree (ARS-936-HP: 0.004°/pulse)
 
 
+# 入力の明示指定（force_measurement.py から CLI で渡される）。None なら自動解決。
+_DATA_DIR_OVERRIDE = None   # 6軸センサ CSV のある data フォルダ
+_LOG_OVERRIDE      = None   # experiment_log.json のパス
+
+
 def _raw_dir():
-    """生データ（data/ と *_experiment_log.json）がある場所を返す。
-      新構成: post_process/ で実行 → ../force_measurement
+    """data/ と *_experiment_log.json を探す場所を返す（CLI 未指定時の自動解決）。
+      新構成: force/analysis/ で実行 → data は ../data、log は ../../（実験直下）
       旧構成(フラット): 実験フォルダ直下で実行 → カレント
-    どちらの構成でも calc_force をそのまま動かせるようにする。"""
-    fm = os.path.join("..", "force_measurement")
-    if os.path.isdir(os.path.join(fm, "data")):
-        return fm
-    if os.path.isdir("data"):
-        return "."
-    if os.path.isdir(fm):
-        return fm
+    """
+    for cand in (".", os.path.join("..", "force_measurement"), ".."):
+        if os.path.isdir(os.path.join(cand, "data")):
+            return cand
     return "."
 
 
+def _data_dir():
+    """6軸センサ CSV のある data フォルダ。"""
+    if _DATA_DIR_OVERRIDE:
+        return _DATA_DIR_OVERRIDE
+    return os.path.join(_raw_dir(), "data")
+
+
 def _load_origin_pulse(default=11025):
-    """origin_pulse を experiment_log → config.json → 既定値 の順で決める。
-    カレントディレクトリ＝解析フォルダで実行される前提（run_postprocess が cd する）。"""
-    logs = sorted(glob.glob(os.path.join(_raw_dir(), "*_experiment_log.json")))
+    """origin_pulse を experiment_log → config.json → 既定値 の順で決める。"""
+    if _LOG_OVERRIDE and os.path.isfile(_LOG_OVERRIDE):
+        logs = [_LOG_OVERRIDE]
+    else:
+        # 自動解決: data の場所 と その1つ上（新構成では実験直下にログ）を探す
+        search = {_raw_dir(), os.path.dirname(os.path.abspath(_data_dir()))}
+        logs = []
+        for d in search:
+            logs += glob.glob(os.path.join(d, "*_experiment_log.json"))
+        logs = sorted(logs)
     for lp in reversed(logs):                      # 複数あれば新しい日付を優先
         try:
             with open(lp, encoding="utf-8") as f:
@@ -128,7 +143,7 @@ def _check_duplicate_points(folder_list):
 
 
 def average():
-    data_dir = os.path.join(_raw_dir(), "data")
+    data_dir = _data_dir()
 
     folder_list = os.listdir(data_dir)
     folder_list = sorted(folder_list)
@@ -137,8 +152,10 @@ def average():
     if ".DS_Store" in folder_list:
         folder_list.remove(".DS_Store")
 
-    # --- [変更] volt_raw.csv を除外（新システムが data/ に混在させる場合の対策）---
-    folder_list = [f for f in folder_list if not f.endswith("_volt_raw.csv")]
+    # --- volt_raw / volt_summary を除外（新システムが data/ に混在させるため）---
+    folder_list = [f for f in folder_list
+                   if not f.endswith("_volt_raw.csv")
+                   and not f.endswith("_volt_summary.csv")]
 
     # --- 重複計測点があれば（リトライ残骸など）汚染前に明示エラーで停止 ---
     _check_duplicate_points(folder_list)
@@ -632,11 +649,32 @@ def report_zero_lift():
     print(sep)
 
 
-average()
-drift()
-calc()
-plot_C_raw()
-calb()
-plot_C_aero()
-plot_PM()
-report_zero_lift()
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="6軸力データ→空力係数（windspeed.csv はカレントから読む）")
+    ap.add_argument("--data_dir", default=None,
+                    help="6軸センサ CSV のある data フォルダ（省略時は自動解決）")
+    ap.add_argument("--log", default=None,
+                    help="experiment_log.json のパス（origin_pulse 用・省略時は自動探索）")
+    args = ap.parse_args()
+
+    global _DATA_DIR_OVERRIDE, _LOG_OVERRIDE, ORIGIN_PULSE
+    if args.data_dir:
+        _DATA_DIR_OVERRIDE = args.data_dir
+    if args.log:
+        _LOG_OVERRIDE = args.log
+    ORIGIN_PULSE = _load_origin_pulse()   # 指定を反映して再計算
+
+    average()
+    drift()
+    calc()
+    plot_C_raw()
+    calb()
+    plot_C_aero()
+    plot_PM()
+    report_zero_lift()
+
+
+if __name__ == "__main__":
+    main()
