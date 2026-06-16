@@ -31,12 +31,14 @@ from __future__ import annotations   # 型注釈を遅延評価にして古い P
 
 import argparse
 import os
+import socket
 import sys
 import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from html import unescape
+from urllib.parse import urljoin
 
 # 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
 # 日本語Windows(cp932)など、出力先が表現できない文字を含む print があっても
@@ -63,9 +65,22 @@ ACC_POLL_INTERVAL = 1.0
 ACC_POLL_TIMEOUT = 30.0
 
 # UPnP デバイス記述ファイルの候補（機種により異なる）。先頭から順に試す。
-DDD_CANDIDATES = ["/Server0/ddd/ddd.xml", "/Server0/ddd.xml", "/ddd.xml"]
+# ※ まず SSDP で実際の記述URLを探し、見つからない時だけこの候補を使う。
+DDD_CANDIDATES = [
+    "/Server0/ddd/ddd.xml", "/Server0/ddd.xml", "/ddd.xml",
+    "/Server0/description.xml", "/description.xml", "/DMS/ddd.xml",
+]
 # ContentDirectory 制御URLの既定（記述ファイルから取得できなかった場合に使用）
 CDS_CONTROL_DEFAULT = "/Server0/CDS_control"
+
+# SSDP（UPnP デバイス発見）でデバイス記述URL(LOCATION)を探すための設定
+SSDP_ADDR = "239.255.255.250"
+SSDP_PORT = 1900
+SSDP_TARGETS = [
+    "urn:schemas-upnp-org:device:MediaServer:1",
+    "urn:schemas-upnp-org:service:ContentDirectory:1",
+    "ssdp:all",
+]
 
 CDS_TYPE = "urn:schemas-upnp-org:service:ContentDirectory:1"
 SHOT_INTERVAL_SEC = 0.8            # 連写の間隔（別ファイルとして確実に記録させる）
@@ -208,34 +223,121 @@ def capture() -> bool:
 # ============================================================
 #  DLNA（撮影画像の取り出し）
 # ============================================================
-def discover_cds_control() -> str:
-    """UPnP デバイス記述から ContentDirectory の制御URL（絶対URL）を得る。
-    取得できなければ既定値を返す。"""
-    for path in DDD_CANDIDATES:
-        status, body = _http_get(f"{DLNA_BASE}{path}")
-        if status != 200 or not body:
-            continue
+def _local_ip_for(remote_ip: str) -> str | None:
+    """remote_ip に到達するために使うローカルIPを返す（PCに複数NICがある場合の判別用）。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((remote_ip, 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
+def ssdp_discover(timeout: float = 2.0, stop_early: bool = True) -> list:
+    """SSDP M-SEARCH を投げ、応答の LOCATION（デバイス記述URL）を集めて返す。
+    カメラのAPに接続している前提。送出インターフェースはカメラ側に固定する。
+    stop_early=True なら最初に LOCATION が取れた時点で打ち切る（実運用の高速化）。
+    --diag では stop_early=False で全 ST を試す。"""
+    locations, seen = [], set()
+    local_ip = _local_ip_for(CAMERA_IP)
+    for st in SSDP_TARGETS:
+        msg = (
+            "M-SEARCH * HTTP/1.1\r\n"
+            f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"
+            'MAN: "ssdp:discover"\r\n'
+            "MX: 2\r\n"
+            f"ST: {st}\r\n\r\n"
+        ).encode("ascii")
+        s = None
         try:
-            text = body.decode("utf-8", errors="replace")
-            # 名前空間を無視して service を走査する
-            root = ET.fromstring(text)
-        except ET.ParseError:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            if local_ip:
+                # 送出を確実にカメラ側NICへ（有線LAN等が同居していても届くように）
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                             socket.inet_aton(local_ip))
+            s.settimeout(timeout)
+            s.sendto(msg, (SSDP_ADDR, SSDP_PORT))
+            end = time.time() + timeout
+            while time.time() < end:
+                try:
+                    data, _ = s.recvfrom(65507)
+                except socket.timeout:
+                    break
+                for line in data.decode("utf-8", "replace").splitlines():
+                    if line.lower().startswith("location:"):
+                        loc = line.split(":", 1)[1].strip()
+                        if loc and loc not in seen:
+                            seen.add(loc)
+                            locations.append(loc)
+        except OSError:
+            pass
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        if stop_early and locations:
+            break
+    return locations
+
+
+def _control_from_description(desc_url: str) -> str | None:
+    """デバイス記述XML(desc_url)を取得し、ContentDirectory の controlURL を
+    絶対URLにして返す（見つからなければ None）。"""
+    status, body = _http_get(desc_url)
+    if status != 200 or not body or isinstance(body, str):
+        return None
+    try:
+        root = ET.fromstring(body.decode("utf-8", errors="replace"))
+    except ET.ParseError:
+        return None
+
+    # 相対 controlURL の解決基準: URLBase があればそれ、
+    # 無ければ記述ドキュメントのURL自身（RFC3986）。urljoin が
+    # 絶対パス(/...)も相対パス(...)も正しく解決する。
+    base = None
+    for el in root.iter():
+        if el.tag.endswith("URLBase") and el.text and el.text.strip():
+            base = el.text.strip()
+            break
+    if not base:
+        base = desc_url
+
+    for svc in root.iter():
+        if not svc.tag.endswith("service"):
             continue
-        for svc in root.iter():
-            if not svc.tag.endswith("service"):
-                continue
-            stype = ctrl = None
-            for child in svc:
-                if child.tag.endswith("serviceType"):
-                    stype = (child.text or "").strip()
-                elif child.tag.endswith("controlURL"):
-                    ctrl = (child.text or "").strip()
-            if stype and "ContentDirectory" in stype and ctrl:
-                if ctrl.startswith("http"):
-                    return ctrl
-                if not ctrl.startswith("/"):
-                    ctrl = "/" + ctrl
-                return f"{DLNA_BASE}{ctrl}"
+        stype = ctrl = None
+        for child in svc:
+            if child.tag.endswith("serviceType"):
+                stype = (child.text or "").strip()
+            elif child.tag.endswith("controlURL"):
+                ctrl = (child.text or "").strip()
+        if stype and "ContentDirectory" in stype and ctrl:
+            if ctrl.startswith("http"):
+                return ctrl
+            return urljoin(base, ctrl)
+    return None
+
+
+def discover_cds_control() -> str:
+    """ContentDirectory の制御URL（絶対URL）を得る。
+      1) SSDP でデバイス記述URLを発見し、そこから制御URLを取得
+      2) 既知の候補パス(DDD_CANDIDATES)を直接たたく
+      3) どれもダメなら既定値
+    """
+    for loc in ssdp_discover():
+        ctrl = _control_from_description(loc)
+        if ctrl:
+            return ctrl
+    for path in DDD_CANDIDATES:
+        ctrl = _control_from_description(f"{DLNA_BASE}{path}")
+        if ctrl:
+            return ctrl
     return f"{DLNA_BASE}{CDS_CONTROL_DEFAULT}"
 
 
@@ -438,7 +540,7 @@ def capture_series(out_dir: str, base_name: str, count: int) -> bool:
         if not set_playmode():
             print("警告: 再生モードへ移行できず、画像を取り出せません。", file=sys.stderr)
             return False
-        time.sleep(2.0)
+        time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
         saved = download_newest(out_dir, base_name, count)
     finally:
         # 撮影モードへ必ず戻す。戻し忘れるとカメラが再生モードのまま残り、
@@ -461,18 +563,29 @@ def dlna_diag() -> int:
     カメラに写真がある状態で実行し、出力を共有してもらえれば構成を特定できる。"""
     print("=== DLNA 構成診断 ===")
 
-    print("[1] デバイス記述ファイル(ddd.xml)の探索:")
+    print("[0] SSDP でデバイス記述(LOCATION)を探索:")
+    locs = ssdp_discover(timeout=3.0, stop_early=False)   # 診断では全STを試す
+    if locs:
+        for loc in locs:
+            ctrl = _control_from_description(loc)
+            print(f"    LOCATION: {loc}")
+            print(f"      → ContentDirectory 制御URL: {ctrl or '(見つからず)'}")
+    else:
+        print("    （SSDP 応答なし。カメラのWi-Fiに繋がっているか、"
+              "PCの別NIC/ファイアウォールを確認）")
+
+    print("[1] デバイス記述ファイル(ddd.xml)候補の直接探索:")
     for path in DDD_CANDIDATES:
         status, body = _http_get(f"{DLNA_BASE}{path}")
         n = len(body) if isinstance(body, (bytes, bytearray)) else 0
         print(f"    {DLNA_BASE}{path}  -> status={status}, {n} bytes")
 
     control_url = discover_cds_control()
-    print(f"[2] ContentDirectory 制御URL: {control_url}")
+    print(f"[2] 採用する ContentDirectory 制御URL: {control_url}")
 
     print("[3] 再生モードへ移行して Browse します...")
     set_playmode()
-    time.sleep(2.0)
+    time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
 
     print("[4] Browse(ObjectID='0') の生レスポンス:")
     soap = _browse_soap("0", 0, 50)
