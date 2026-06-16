@@ -83,27 +83,64 @@ def main() -> int:
 
     py = sys.executable   # この後処理を起動している venv の python
 
-    # --- Step 1: windspeed.csv（force/analysis へ出力）---
-    print("[force 1/2] windspeed.csv を生成中...")
-    r1 = subprocess.run([py, MAKE_WS,
-                         "--volt_dir", data_dir,
-                         "--date", date_str,
-                         "--out", analysis_dir,
-                         "--log", log_path])
-    if r1.returncode != 0:
-        print(f"[force] make_windspeed.py に失敗（終了コード {r1.returncode}）", file=sys.stderr)
-        return r1.returncode
+    v_dirs = sorted([d for d in os.listdir(data_dir) 
+                     if os.path.isdir(os.path.join(data_dir, d)) and d.startswith("V_")])
 
-    # --- Step 2: 空力係数・グラフ（analysis_dir をカレントにして実行）---
-    print("[force 2/2] 空力係数を計算・グラフを出力中...")
-    r2 = subprocess.run([py, CALC_F, "--data_dir", data_dir, "--log", log_path],
-                        cwd=analysis_dir)
-    if r2.returncode != 0:
-        print(f"[force] calc_force.py に失敗（終了コード {r2.returncode}）", file=sys.stderr)
-        return r2.returncode
+    if v_dirs:
+        print(f"\n[force] 風速スイープ（{len(v_dirs)}件）を処理します...")
+        success_count = 0
+        for v_dir in v_dirs:
+            print(f"\n--- {v_dir} の処理 ---")
+            sub_data_dir = os.path.join(data_dir, v_dir)
+            sub_analysis_dir = os.path.join(analysis_dir, v_dir)
+            os.makedirs(sub_analysis_dir, exist_ok=True)
 
-    print(f"[force] 完了。出力: {analysis_dir}")
-    return 0
+            print(f"[force 1/2] {v_dir}: windspeed.csv を生成中...")
+            r1 = subprocess.run([py, MAKE_WS,
+                                 "--volt_dir", sub_data_dir,
+                                 "--date", date_str,
+                                 "--out", sub_analysis_dir,
+                                 "--log", log_path])
+            if r1.returncode != 0:
+                print(f"[エラー] {v_dir}: make_windspeed.py 失敗", file=sys.stderr)
+                continue
+
+            print(f"[force 2/2] {v_dir}: 空力係数を計算・グラフを出力中...")
+            r2 = subprocess.run([py, CALC_F, "--data_dir", sub_data_dir, "--log", log_path],
+                                cwd=sub_analysis_dir)
+            if r2.returncode != 0:
+                print(f"[エラー] {v_dir}: calc_force.py 失敗", file=sys.stderr)
+                continue
+            
+            success_count += 1
+
+        print(f"\n[force] 完了。{success_count}/{len(v_dirs)} 件の風速を処理しました。")
+        print(f"出力: {analysis_dir}")
+        return 0 if success_count > 0 else 1
+
+    else:
+        # --- 従来構成（風速フォルダがない場合）の処理 ---
+        # Step 1: windspeed.csv（force/analysis へ出力）
+        print("[force 1/2] windspeed.csv を生成中...")
+        r1 = subprocess.run([py, MAKE_WS,
+                             "--volt_dir", data_dir,
+                             "--date", date_str,
+                             "--out", analysis_dir,
+                             "--log", log_path])
+        if r1.returncode != 0:
+            print(f"[force] make_windspeed.py に失敗（終了コード {r1.returncode}）", file=sys.stderr)
+            return r1.returncode
+
+        # Step 2: 空力係数・グラフ（analysis_dir をカレントにして実行）
+        print("[force 2/2] 空力係数を計算・グラフを出力中...")
+        r2 = subprocess.run([py, CALC_F, "--data_dir", data_dir, "--log", log_path],
+                            cwd=analysis_dir)
+        if r2.returncode != 0:
+            print(f"[force] calc_force.py に失敗（終了コード {r2.returncode}）", file=sys.stderr)
+            return r2.returncode
+
+        print(f"[force] 完了。出力: {analysis_dir}")
+        return 0
 
 
 if __name__ == "__main__":

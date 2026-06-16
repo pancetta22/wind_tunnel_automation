@@ -100,7 +100,15 @@ function prompt_origin_pulse_update_(exp_dir, config_path)
     %     過去実験の再処理でもそのまま config に適用できる。
     report_path = fullfile(exp_dir, 'zero_lift_report.json');
     if ~isfile(report_path)
-        return   % レポートが無ければ何もしない（線形域不足などでスキップされた場合）
+        % 風速スイープ構成の場合、V_* サブフォルダ内を探す
+        v_dirs = dir(fullfile(exp_dir, 'V_*'));
+        v_dirs = v_dirs([v_dirs.isdir]);
+        if ~isempty(v_dirs)
+            report_path = fullfile(exp_dir, v_dirs(1).name, 'zero_lift_report.json');
+        end
+        if ~isfile(report_path)
+            return   % レポートが無ければ何もしない
+        end
     end
     try
         rep = jsondecode(read_text_utf8_(report_path));

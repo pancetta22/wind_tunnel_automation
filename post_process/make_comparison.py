@@ -219,10 +219,24 @@ if SCAN_DIR and os.path.isdir(SCAN_DIR):
     for _sub in sorted(os.listdir(SCAN_DIR)):
         if "rigid" not in _sub.lower():
             continue
-        _ca = os.path.join(SCAN_DIR, _sub, "force", "analysis", "C_aero.csv")
-        if not os.path.isfile(_ca):
-            _ca = os.path.join(SCAN_DIR, _sub, "C_aero.csv")   # 旧フラット互換
-        _try_add(_sub, _ca)
+        
+        analysis_dir = os.path.join(SCAN_DIR, _sub, "force", "analysis")
+        if os.path.isdir(analysis_dir):
+            # 新構成：V_* フォルダがあるかチェック（風速スイープ対応）
+            v_dirs = sorted([d for d in os.listdir(analysis_dir) if d.startswith("V_") and os.path.isdir(os.path.join(analysis_dir, d))])
+            if v_dirs:
+                for v_dir in v_dirs:
+                    _ca = os.path.join(analysis_dir, v_dir, "C_aero.csv")
+                    # 表示用に _rigid を消して _V_... にする
+                    sub_v = _sub.replace("_rigid", "") + f"_{v_dir}"
+                    _try_add(sub_v, _ca)
+            else:
+                _ca = os.path.join(analysis_dir, "C_aero.csv")
+                _try_add(_sub, _ca)
+        else:
+            # 旧フラット互換
+            _ca = os.path.join(SCAN_DIR, _sub, "C_aero.csv")
+            _try_add(_sub, _ca)
 BG_COLOR.setdefault("new", RGBColor(0xDD, 0xF5, 0xE8))   # 淡い緑（新システム新規）
 NOTE_STR.setdefault("new", "（新システム・新規）")
 if _ai:

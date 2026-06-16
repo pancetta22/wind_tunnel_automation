@@ -136,6 +136,7 @@ else
 end
 
 exp_control = '';   % 停止メニューの結果（''=正常完了 / restart_full / restart_after_met / restart_goto / quit）
+current_wind_dir = ''; % 現在の風速スイープのデータフォルダ
 
 ph_idx = start_idx;
 while ph_idx <= n_phases
@@ -154,19 +155,44 @@ while ph_idx <= n_phases
     fprintf('  フェーズ %d/%d: %s\n', ph_idx, n_phases, phase);
     fprintf('========================================\n\n');
 
+    % ---- ファイル保存先の決定・ブロワー確認 ----
+    is_wind = is_wind_phase_(phase);
+    if ~is_wind
+        phase_dir = fullfile(data_dir, 'offset');
+        [~,~] = mkdir(phase_dir);
+        % ---- ブロワー状態の確認 ----
+        confirm_blower_(phase);
+    else
+        if isempty(current_wind_dir)
+            % 新しい風速の最初のフェーズ（Pdata等）
+            fprintf('=== 風速の調整 ===\n');
+            confirm_blower_(phase);  % ユーザーがブロワーを手動調整
+            
+            % 代表電圧を取得（安定後に数秒平均）
+            rep_mV = measure_rep_voltage_(s_volt);
+            current_wind_dir = fullfile(data_dir, sprintf('V_%.1fmV', rep_mV));
+            [~,~] = mkdir(current_wind_dir);
+            fprintf('[準備] 風速フォルダを作成しました: %s\n', current_wind_dir);
+            
+            % オフセットデータを新しいフォルダへコピー
+            copy_offset_files_(fullfile(data_dir, 'offset'), current_wind_dir);
+        else
+            % 同一風速での後続フェーズ（Mdata等）では状態確認のみ
+            confirm_blower_(phase);
+        end
+        phase_dir = current_wind_dir;
+    end
+
     % ---- ファイル準備 ----
     % フェーズ再入場（エラーメニューC・停止メニューからの再開・同フォルダ再実験）で
     % 古い計測CSVが残っていると、calc_force が同一点を二重に読んで結果が汚染される。
     % どの経路から入ってもクリーンに始まるよう、このフェーズの既存ファイルを毎回掃除する
     % （初回は対象が無く何もしない）。
-    delete_phase_data_(data_dir, phase);
+    delete_phase_data_(phase_dir, phase);
     summary_fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
-    summary_path  = fullfile(data_dir, summary_fname);
+    summary_path  = fullfile(phase_dir, summary_fname);
     init_volt_summary_(summary_path);
     fprintf('[準備] デジボルサマリー: %s\n\n', summary_fname);
-
-    % ---- ブロワー状態の確認 ----
-    confirm_blower_(phase);
 
     % ---- 差圧センサ電圧オフセット自動計測（Pofst で1回だけ）----
     %  連続実験では前回 Mdata の通風が残っていることがあるため、必ず
@@ -247,8 +273,8 @@ while ph_idx <= n_phases
             fname_force    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'full');
             fname_volt_raw = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'volt_raw');
             fname_short    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'short');
-            force_path     = fullfile(data_dir, fname_force);
-            volt_raw_path  = fullfile(data_dir, fname_volt_raw);
+            force_path     = fullfile(phase_dir, fname_force);
+            volt_raw_path  = fullfile(phase_dir, fname_volt_raw);
 
             % ------ d. 同時計測開始 ------
             monitor.resetGraph();
@@ -403,6 +429,26 @@ while ph_idx <= n_phases
             fprintf('=== %s フェーズ完了 ===\n\n', phase);
             notify_sound_(2);   % フェーズ完了を音で実験者に通知
             try; stage.moveToAngle(0); catch; end
+            
+            % ---- 次の風速で計測するか確認（風速スイープ）----
+            if is_wind_phase_(phase)
+                % 有風フェーズの最後かチェック (Mdataか、Mdataが無効ならPdata)
+                is_last_wind = (ph_idx == 4) || (ph_idx == 3 && ~phase_enabled(4));
+                if is_last_wind
+                    ans_next_wind = strtrim(input('次の風速で計測しますか？ [y/n]: ', 's'));
+                    if any(strcmpi(ans_next_wind, {'y', 'yes'}))
+                        current_wind_dir = '';  % リセットして新しい風速フォルダを作る
+                        % 最初の有風フェーズに戻る
+                        if phase_enabled(3)
+                            ph_idx = 3; % Pdata
+                        else
+                            ph_idx = 4; % Mdata
+                        end
+                        continue; % while ph_idx <= n_phases の先頭へ
+                    end
+                end
+            end
+            
             ph_idx = ph_idx + 1;
 
         case 'restart'
@@ -413,6 +459,10 @@ while ph_idx <= n_phases
         case 'goto'
             try; stage.moveToAngle(0); catch; end
             ph_idx = goto_ph_idx;
+            % 途中から再開する場合、風速フォルダのリセットが必要なフェーズならリセット
+            if is_wind_phase_(all_phases{ph_idx})
+                current_wind_dir = ''; 
+            end
 
         case 'quit'
             fprintf('[中止] 実験を終了します。\n\n');
@@ -1185,4 +1235,58 @@ function run_postprocess_if_ready_(exp_dir, date_str, cfg, phase_enabled)
 
     fprintf('\n[後処理] 全フェーズのデータが揃いました。後処理を開始します...\n\n');
     run_postprocess(exp_dir, cfg);
+end
+
+function copy_offset_files_(src_dir, dst_dir)
+    % offsetフォルダから無風時の生データを新しい風速フォルダへコピーする。
+    % calc_force.py が各風速フォルダを独立した完全なデータセットとして処理できるようにする。
+    if ~isfolder(src_dir)
+        fprintf('[警告] コピー元の offset フォルダが見つかりません: %s\n', src_dir);
+        return;
+    end
+    files = dir(fullfile(src_dir, '*.csv'));
+    n = 0;
+    for i = 1:numel(files)
+        src_path = fullfile(files(i).folder, files(i).name);
+        dst_path = fullfile(dst_dir, files(i).name);
+        copyfile(src_path, dst_path);
+        n = n + 1;
+    end
+    fprintf('[準備] オフセットデータ %d ファイルをコピーしました。\n\n', n);
+end
+
+function rep_mV = measure_rep_voltage_(s_volt)
+    MEAS_SEC = 5;
+    fprintf('[代表電圧計測] 現在の風速の代表電圧（デジボル）を %.0f 秒間計測します...\n', MEAS_SEC);
+    
+    samples = zeros(1, 200);
+    n = 0;
+    t_end = tic;
+    
+    while toc(t_end) < MEAS_SEC
+        try
+            writeline(s_volt, 'MD?');
+            raw  = readline(s_volt);
+            v_mv = str2double(strtrim(raw)) * 1000;
+            if ~isnan(v_mv)
+                n = n + 1;
+                if n > numel(samples)
+                    samples = [samples, zeros(1, 100)]; %#ok<AGROW>
+                end
+                samples(n) = v_mv;
+                fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
+            end
+        catch
+        end
+    end
+    fprintf('\n');
+    
+    if n == 0
+        warning('[代表電圧計測] サンプルを取得できませんでした。0mV とします。');
+        rep_mV = 0.0;
+        return;
+    end
+    
+    rep_mV = mean(samples(1:n));
+    fprintf('  → 代表電圧 = %+.1f mV  (%d サンプル)\n\n', rep_mV, n);
 end
