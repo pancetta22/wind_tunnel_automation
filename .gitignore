@@ -17,6 +17,10 @@ pressure_data.csv
 venv/
 ENV/
 
+# Camera test output (lumix_test.py の撮影テスト保存先・リポジトリには入れない)
+diagnostics/lumix_test_out/
+test_photos/
+
 # OS/IDE generated files
 .DS_Store
 Thumbs.db
