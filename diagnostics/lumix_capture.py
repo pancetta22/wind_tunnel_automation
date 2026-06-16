@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from html import unescape
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 # 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
 # 日本語Windows(cp932)など、出力先が表現できない文字を含む print があっても
@@ -117,6 +117,59 @@ def _http_post(url: str, body: str, soap_action: str,
         return e.code, e.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, OSError) as e:
         return None, str(e)
+
+
+def _soap_post_raw(url: str, body: str, soap_action: str,
+                   timeout: float = 8.0) -> tuple[int | None, str]:
+    """SOAP POST を生ソケットの HTTP/1.0 + Connection: close で送る。
+    Panasonic の組込みUPnPサーバは urllib の HTTP/1.1 だと応答せずハングする
+    ことがある（Browse POST が timed out になる）。HTTP/1.0 で接続終了まで読み切り、
+    (status, body文字列) を返す。"""
+    p = urlparse(url)
+    host, port = p.hostname, (p.port or 80)
+    path = p.path or "/"
+    if p.query:
+        path += "?" + p.query
+    data = body.encode("utf-8")
+    req = (
+        f"POST {path} HTTP/1.0\r\n"
+        f"HOST: {host}:{port}\r\n"
+        'CONTENT-TYPE: text/xml; charset="utf-8"\r\n'
+        f"CONTENT-LENGTH: {len(data)}\r\n"
+        f'SOAPACTION: "{soap_action}"\r\n'
+        "USER-AGENT: LUMIX Sync\r\n"
+        "CONNECTION: close\r\n\r\n"
+    ).encode("ascii") + data
+
+    s = None
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        s.settimeout(timeout)
+        s.sendall(req)
+        chunks = []
+        while True:
+            try:
+                buf = s.recv(65536)
+            except socket.timeout:
+                break
+            if not buf:
+                break
+            chunks.append(buf)
+        raw = b"".join(chunks)
+    except OSError as e:
+        return None, str(e)
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+    head, _, body_bytes = raw.partition(b"\r\n\r\n")
+    status_line = head.split(b"\r\n", 1)[0].decode("ascii", "replace")
+    parts = status_line.split()
+    status = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else None
+    return status, body_bytes.decode("utf-8", errors="replace")
 
 
 # ============================================================
@@ -364,7 +417,9 @@ def _browse(control_url: str, object_id: str,
     """ContentDirectory を Browse して (items, containers, total_matches) を返す。
     items/containers は dict のリスト。"""
     soap = _browse_soap(object_id, start, count)
-    status, resp = _http_post(control_url, soap, f"{CDS_TYPE}#Browse")
+    # 組込みUPnPサーバ対策で HTTP/1.0(生ソケット)で送る。urllib(HTTP/1.1)だと
+    # Panasonic では応答せずタイムアウトすることがあるため。
+    status, resp = _soap_post_raw(control_url, soap, f"{CDS_TYPE}#Browse")
     if status != 200 or not resp:
         return [], [], 0
 
@@ -570,6 +625,13 @@ def dlna_diag() -> int:
             ctrl = _control_from_description(loc)
             print(f"    LOCATION: {loc}")
             print(f"      → ContentDirectory 制御URL: {ctrl or '(見つからず)'}")
+        # 先頭LOCATIONの記述XMLを生で出す（controlURL/eventURL/URLBase 確認用）
+        st_d, body_d = _http_get(locs[0])
+        text_d = (body_d.decode("utf-8", "replace")
+                  if isinstance(body_d, (bytes, bytearray)) else str(body_d))
+        print(f"    --- デバイス記述(先頭1200字) status={st_d} ---")
+        for line in text_d[:1200].splitlines():
+            print(f"    {line}")
     else:
         print("    （SSDP 応答なし。カメラのWi-Fiに繋がっているか、"
               "PCの別NIC/ファイアウォールを確認）")
@@ -587,14 +649,26 @@ def dlna_diag() -> int:
     set_playmode()
     time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
 
-    print("[4] Browse(ObjectID='0') の生レスポンス:")
+    # Browse POST を複数方式×URLで試し、どれが 200 を返すか確認する。
     soap = _browse_soap("0", 0, 50)
-    status, resp = _http_post(control_url, soap, f"{CDS_TYPE}#Browse")
-    print(f"    POST -> status={status}, {len(resp)} chars")
-    if status != 200:
-        print(f"    先頭: {resp[:400]!r}")
+    lumix_variant = control_url.replace("/Server0/", "/Lumix/Server0/")
+    trials = [
+        ("urllib HTTP/1.1     ", control_url,
+         lambda u: _http_post(u, soap, f"{CDS_TYPE}#Browse", timeout=6.0)),
+        ("raw    HTTP/1.0     ", control_url,
+         lambda u: _soap_post_raw(u, soap, f"{CDS_TYPE}#Browse", timeout=6.0)),
+    ]
+    if lumix_variant != control_url:
+        trials.append(("raw    HTTP/1.0(/Lumix)", lumix_variant,
+                       lambda u: _soap_post_raw(u, soap, f"{CDS_TYPE}#Browse", timeout=6.0)))
+    print("[4] Browse(ObjectID='0') を複数方式で試行:")
+    for label, url, fn in trials:
+        st, resp = fn(url)
+        head = resp[:160].replace("\n", " ").replace("\r", " ")
+        print(f"    [{label}] {url}")
+        print(f"        -> status={st}, {len(resp)} chars  先頭: {head!r}")
 
-    print("[5] ContentDirectory の木構造:")
+    print("[5] ContentDirectory の木構造（raw HTTP/1.0 で取得）:")
 
     def walk(oid: str, depth: int) -> int:
         if depth > 4:
