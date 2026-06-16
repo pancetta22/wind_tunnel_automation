@@ -149,8 +149,22 @@ def connect() -> bool:
     return True
 
 
+def _set_mode(value: str, retries: int = 4, settle: float = 1.0) -> str | None:
+    """camcmd のモード切替（recmode/playmode）をリトライ付きで行う。
+    err_busy / err_critical はカメラがモード遷移中の一時的失敗のことが多いので、
+    間隔を空けて数回試す。最後に得た result を返す（成功時は "ok"）。"""
+    result = None
+    for attempt in range(retries):
+        result = cam_cmd(f"mode=camcmd&value={value}")
+        if result == "ok":
+            time.sleep(settle)            # 切替後はカメラが安定するまで待つ
+            return "ok"
+        time.sleep(0.8 * (attempt + 1))   # err_busy/err_critical/None → 待って再試行
+    return result
+
+
 def set_recmode() -> bool:
-    result = cam_cmd("mode=camcmd&value=recmode")
+    result = _set_mode("recmode")
     if result != "ok":
         print(f"エラー: recmode 移行失敗 (result={result})", file=sys.stderr)
         return False
@@ -158,18 +172,26 @@ def set_recmode() -> bool:
 
 
 def set_playmode() -> bool:
-    result = cam_cmd("mode=camcmd&value=playmode")
+    result = _set_mode("playmode")
     if result != "ok":
         print(f"警告: playmode 移行失敗 (result={result})", file=sys.stderr)
         return False
     return True
 
 
+_af_warned = False   # AF 非対応の警告は1プロセスにつき1回だけ出す
+
+
 def capture() -> bool:
-    """シャッターを切る（AF → 撮影 → 解放）"""
+    """シャッターを切る（AF → 撮影 → 解放）。
+    AF コマンド(af_s_push)はフォーカスモードや機種によって err_param を返すが、
+    撮影自体は capture で行えるため致命的ではない（警告は1回だけに抑える）。"""
+    global _af_warned
     result = cam_cmd("mode=camcmd&value=af_s_push")
-    if result not in ("ok", None):  # 機種によりAFなしでもok
-        print(f"警告: AF失敗 (result={result})", file=sys.stderr)
+    if result not in ("ok", None) and not _af_warned:
+        print(f"情報: AF コマンドが効きませんでした (result={result})。"
+              "撮影は継続します（MF/フォーカス済みなら問題ありません）。", file=sys.stderr)
+        _af_warned = True
 
     time.sleep(0.5)  # AFのための待機
 
@@ -217,11 +239,9 @@ def discover_cds_control() -> str:
     return f"{DLNA_BASE}{CDS_CONTROL_DEFAULT}"
 
 
-def _browse(control_url: str, object_id: str,
-            start: int, count: int) -> tuple[list, list, int]:
-    """ContentDirectory を Browse して (items, containers, total_matches) を返す。
-    items/containers は dict のリスト。"""
-    soap = (
+def _browse_soap(object_id: str, start: int, count: int) -> str:
+    """ContentDirectory#Browse の SOAP リクエスト本文を組み立てる。"""
+    return (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
         's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
@@ -235,6 +255,13 @@ def _browse(control_url: str, object_id: str,
         '<SortCriteria></SortCriteria>'
         '</u:Browse></s:Body></s:Envelope>'
     )
+
+
+def _browse(control_url: str, object_id: str,
+            start: int, count: int) -> tuple[list, list, int]:
+    """ContentDirectory を Browse して (items, containers, total_matches) を返す。
+    items/containers は dict のリスト。"""
+    soap = _browse_soap(object_id, start, count)
     status, resp = _http_post(control_url, soap, f"{CDS_TYPE}#Browse")
     if status != 200 or not resp:
         return [], [], 0
@@ -302,27 +329,53 @@ def _pick_original(item: dict) -> str | None:
     return res[-1]["url"]
 
 
+def _browse_children(control_url: str, object_id: str, page: int = 50) -> tuple[list, list]:
+    """object_id の直下を（ページングしながら）すべて Browse し、
+    (items, containers) を返す。
+    ※ RequestedCount=0 は機種により 0 件を返すため使わず、ページごとに取得する。"""
+    items, containers = [], []
+    start = 0
+    for _ in range(200):      # 安全弁: StartingIndex を無視する機種での無限ループ防止
+        got_items, got_conts, total = _browse(control_url, object_id, start, page)
+        items.extend(got_items)
+        containers.extend(got_conts)
+        got = len(got_items) + len(got_conts)
+        if got == 0:
+            break
+        start += got
+        if total and start >= total:
+            break
+        if got < page:        # total 不明でも1ページに収まったら終わり
+            break
+    return items, containers
+
+
+def _collect_all_items(control_url: str, root_id: str = "0", max_depth: int = 5) -> list:
+    """root_id 以下を幅優先でたどって全 item を DLNA の並び順で集める。
+    Panasonic は「0 → 日付などのコンテナ → item」と階層化されることが多いので再帰する。"""
+    collected = []
+    queue = [(root_id, 0)]
+    visited = set()
+    while queue:
+        oid, depth = queue.pop(0)
+        if oid in visited or depth > max_depth:
+            continue
+        visited.add(oid)
+        items, containers = _browse_children(control_url, oid)
+        collected.extend(items)
+        for c in containers:
+            queue.append((c["id"], depth + 1))
+    return collected
+
+
 def _newest_items(control_url: str, count: int) -> list:
-    """新しい順ではなく「古い→新しい」順で末尾 count 件の item を返す
-    （撮影順に <name>1..<name>N と対応させるため）。"""
-    # まずルート直下を見る
-    items, containers, total = _browse(control_url, "0", 0, 0)
-    target_id, total_items = "0", total
-    if not items and containers:
-        # アイテムが直下に無い → 子数最大のコンテナを写真フォルダとみなす
-        target = max(containers, key=lambda c: c["child_count"])
-        target_id = target["id"]
-        _, _, total_items = _browse(control_url, target_id, 0, 1)
-
-    if total_items <= 0:
-        # total が取れない機種向けフォールバック：直下/コンテナを総なめ
-        if items:
-            return items[-count:]
+    """撮影直後に呼ぶ。全 item を集めて末尾（最新）count 件を返す。
+    DLNA は通常フォルダ内を古い→新しい順で返すため、全体の末尾が直近の撮影に対応する
+    （撮影順に <name>1..<name>N と対応させる）。"""
+    items = _collect_all_items(control_url)
+    if not items:
         return []
-
-    start = max(0, total_items - count)
-    tail, _, _ = _browse(control_url, target_id, start, count)
-    return tail
+    return items[-count:]
 
 
 def download_newest(out_dir: str, base_name: str, count: int) -> int:
@@ -332,16 +385,18 @@ def download_newest(out_dir: str, base_name: str, count: int) -> int:
     control_url = discover_cds_control()
     print(f"[DLNA] ContentDirectory: {control_url}")
 
-    # 撮影直後はインデックス更新に時間がかかることがあるので軽くリトライ
+    # 撮影直後はインデックス更新に時間がかかることがあるのでリトライ
     items = []
-    for _ in range(3):
+    for _ in range(4):
         items = _newest_items(control_url, count)
         if len(items) >= count:
             break
-        time.sleep(1.0)
+        time.sleep(1.5)
     if not items:
-        print("エラー: カメラ内に画像が見つかりません（DLNA構成が想定と異なる可能性）",
+        print("エラー: カメラ内に画像が見つかりません（DLNA構成が想定と異なる可能性）。",
               file=sys.stderr)
+        print("  → カメラ単体で `python lumix_capture.py --diag` を実行し、"
+              "DLNA構成（木構造）を確認してください。", file=sys.stderr)
         return 0
     if len(items) < count:
         print(f"警告: 取得できた画像が {len(items)} 枚で、要求 {count} 枚に足りません。",
@@ -371,23 +426,86 @@ def download_newest(out_dir: str, base_name: str, count: int) -> int:
 def capture_series(out_dir: str, base_name: str, count: int) -> bool:
     """count 枚撮影して out_dir/<base_name>{1..N}.JPG に保存する。"""
     print(f"撮影中... {base_name} を {count} 枚")
-    for i in range(count):
-        if not capture():
-            return False
-        if i < count - 1:
-            time.sleep(SHOT_INTERVAL_SEC)
+    saved = 0
+    try:
+        for i in range(count):
+            if not capture():
+                return False
+            if i < count - 1:
+                time.sleep(SHOT_INTERVAL_SEC)
 
-    # 再生モードに切り替えて画像を取り出し、撮影モードに戻す
-    set_playmode()
-    time.sleep(1.0)
-    saved = download_newest(out_dir, base_name, count)
-    set_recmode()
+        # 再生モードに切り替えて画像を取り出す（DLNA が立ち上がるまで余裕を持って待つ）
+        if not set_playmode():
+            print("警告: 再生モードへ移行できず、画像を取り出せません。", file=sys.stderr)
+            return False
+        time.sleep(2.0)
+        saved = download_newest(out_dir, base_name, count)
+    finally:
+        # 撮影モードへ必ず戻す。戻し忘れるとカメラが再生モードのまま残り、
+        # 次の迎角の接続(recmode)が err_busy になって連鎖的に失敗するため。
+        set_recmode()
 
     if saved < count:
         print(f"撮影/保存が不完全です（{saved}/{count} 枚）", file=sys.stderr)
         return False
     print(f"撮影完了: {saved}/{count} 枚保存しました")
     return True
+
+
+# ============================================================
+#  DLNA 構成診断（--diag）
+# ============================================================
+def dlna_diag() -> int:
+    """DLNA 構成を診断して表示する（画像を保存できない時の原因切り分け用）。
+    ddd.xml の探索結果・制御URL・Browse の生ステータス・木構造を出力する。
+    カメラに写真がある状態で実行し、出力を共有してもらえれば構成を特定できる。"""
+    print("=== DLNA 構成診断 ===")
+
+    print("[1] デバイス記述ファイル(ddd.xml)の探索:")
+    for path in DDD_CANDIDATES:
+        status, body = _http_get(f"{DLNA_BASE}{path}")
+        n = len(body) if isinstance(body, (bytes, bytearray)) else 0
+        print(f"    {DLNA_BASE}{path}  -> status={status}, {n} bytes")
+
+    control_url = discover_cds_control()
+    print(f"[2] ContentDirectory 制御URL: {control_url}")
+
+    print("[3] 再生モードへ移行して Browse します...")
+    set_playmode()
+    time.sleep(2.0)
+
+    print("[4] Browse(ObjectID='0') の生レスポンス:")
+    soap = _browse_soap("0", 0, 50)
+    status, resp = _http_post(control_url, soap, f"{CDS_TYPE}#Browse")
+    print(f"    POST -> status={status}, {len(resp)} chars")
+    if status != 200:
+        print(f"    先頭: {resp[:400]!r}")
+
+    print("[5] ContentDirectory の木構造:")
+
+    def walk(oid: str, depth: int) -> int:
+        if depth > 4:
+            return 0
+        items, containers = _browse_children(control_url, oid)
+        pad = "    " + "  " * depth
+        n_total = len(items)
+        for c in containers:
+            print(f"{pad}[container] id={c['id']} childCount={c['child_count']}")
+            n_total += walk(c["id"], depth + 1)
+        for it in items[:5]:
+            url = _pick_original(it) or "(URLなし)"
+            print(f"{pad}[item] id={it['id']}  {url}")
+        if len(items) > 5:
+            print(f"{pad}... 他 {len(items) - 5} 件の item")
+        return n_total
+
+    total_items = walk("0", 0)
+    print(f"[6] 見つかった item 合計: {total_items} 件")
+    if total_items == 0:
+        print("    → カメラに画像が無いか、Browse 構成が想定と異なります。")
+        print("       カメラのSDに写真があるか確認し、[1]〜[5] の出力を共有してください。")
+    set_recmode()
+    return 0 if total_items > 0 else 1
 
 
 # ============================================================
@@ -404,12 +522,18 @@ def main() -> int:
                         help="保存ファイル名のベース（例 p1deg → p1deg1.JPG..）")
     parser.add_argument("--count", type=int, default=1,
                         help="撮影枚数（--out 指定時、既定1）")
+    parser.add_argument("--diag", action="store_true",
+                        help="DLNA構成を診断して表示する（画像を保存できない時の原因切り分け）")
     args = parser.parse_args()
 
     print("接続中...")
     if not connect():
         return 1
     print("接続OK")
+
+    # --diag: DLNA構成の診断（撮影はしない）
+    if args.diag:
+        return dlna_diag()
 
     # --check: 接続確認のみ
     if args.check:
