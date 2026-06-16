@@ -24,6 +24,10 @@
 #   Cl.png, Cd.png, Cm.png, polar.png, Cl_PM.png, Cd_PM.png, Cm_PM.png
 
 import os
+import re
+import sys
+import json
+import glob
 import pandas as pd
 import numpy as np
 import math
@@ -31,6 +35,78 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from tqdm import tqdm
 import traceback
+
+# 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
+# 日本語Windows(cp932)など、出力先が表現できない文字を含む print があっても
+# UnicodeEncodeError で中断せず、その文字を '?' 等に置換して続行する。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+
+
+def angle_from_name(name, sign):
+    """ファイル名（..._Pdata_10.01.csv 等）から参照迎角を取り出す。
+    刻み幅が 1° 以外でも、行番号ではなく実際の角度を AoA に使えるようにする。
+    sign: 正フェーズ(P)は +1、負フェーズ(M)は -1。
+    """
+    m = re.search(r"_(\d+)\.\d{2}\.csv$", str(name))
+    return sign * int(m.group(1)) if m else 0
+
+# ロータリーステージ設定
+#   origin_pulse は「その実験を計測した時の値」を使うのが正しい
+#   （α0 は計測時の原点を基準に測られているため）。
+#   優先1: 実験フォルダの experiment_log.json（run_experiment が計測時に記録）
+#   優先2: リポジトリルートの config.json（現在の設定。古いログにはキーが無い）
+#   優先3: 既定値 11025
+PULSE_PER_DEG = 250     # pulse per degree (ARS-936-HP: 0.004°/pulse)
+
+
+def _load_origin_pulse(default=11025):
+    """origin_pulse を experiment_log → config.json → 既定値 の順で決める。
+    カレントディレクトリ＝実験フォルダで実行される前提（run_postprocess が cd する）。"""
+    logs = sorted(glob.glob("*_experiment_log.json"))
+    for lp in reversed(logs):                      # 複数あれば新しい日付を優先
+        try:
+            with open(lp, encoding="utf-8") as f:
+                v = json.load(f).get("origin_pulse")
+            if v is not None:
+                return int(v)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            pass
+    repo_root   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(repo_root, "config.json")
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return int(json.load(f).get("origin_pulse", default))
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return default
+
+
+ORIGIN_PULSE = _load_origin_pulse()   # 迎角0°に対応する機械座標 [pulse]（計測時の値）
+
+
+def _check_duplicate_points(folder_list):
+    """同一（フェーズ・角度）のCSVが複数無いか検査する。
+    リトライ残骸などの重複があるとオフセット対応がずれて結果が静かに汚染される
+    （260608 の Cl=NaN の原因）ため、処理前に明示的に止める。"""
+    pt = re.compile(r"_(Pofst|Mofst|Pdata|Mdata)_(\d+\.\d{2})\.csv$")
+    seen = {}
+    for f in folder_list:
+        m = pt.search(f)
+        if m:
+            seen.setdefault((m.group(1), m.group(2)), []).append(f)
+    dups = {k: v for k, v in seen.items() if len(v) > 1}
+    if not dups:
+        return
+    print("[エラー] 同一計測点のCSVが複数あります（中断・リトライの残骸の可能性）:")
+    for (ph, ang), fs in sorted(dups.items()):
+        print(f"  {ph} {ang}:")
+        for f in fs:
+            print(f"    - {f}")
+    print("  → 正しい方（通常は新しいタイムスタンプ）を残して他を削除し、再実行してください。")
+    raise SystemExit(1)
 
 
 def average():
@@ -46,6 +122,9 @@ def average():
 
     # --- [変更] volt_raw.csv を除外（新システムが data/ に混在させる場合の対策）---
     folder_list = [f for f in folder_list if not f.endswith("_volt_raw.csv")]
+
+    # --- 重複計測点があれば（リトライ残骸など）汚染前に明示エラーで停止 ---
+    _check_duplicate_points(folder_list)
 
     print(folder_list)
 
@@ -93,7 +172,10 @@ def average():
 def drift():
     data = pd.read_csv("av_Forces.csv", usecols=[0, 1, 2, 3, 4, 5, 6])
     data.columns = ["name", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
-    data.loc[:, "Fx":"Mz"] = data.loc[:, "Fx":"Mz"] - data.loc[0, "Fx":"Mz"]  # 初期オフセットをゼロ
+    _C6 = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+    # 初期オフセットをゼロに（.loc[:, "A":"B"] のスライス代入は新しい pandas で
+    # dtype 不整合エラーになるため、列リスト代入＋float化で安全に行う）
+    data[_C6] = data[_C6].astype(float) - data.loc[0, _C6].astype(float)
     Pofst = np.empty((0, len(data.columns)))
     Mofst = np.empty((0, len(data.columns)))
     Pdata = np.empty((0, len(data.columns)))
@@ -173,14 +255,16 @@ def drift():
     Mofst = pd.DataFrame(Mofst, columns=data.columns)
     Pdata = pd.DataFrame(Pdata, columns=data.columns)
     Mdata = pd.DataFrame(Mdata, columns=data.columns)
-    Pofst["AoA"] = Pofst.index
-    Pdata["AoA"] = Pdata.index
-    Mofst["AoA"] = -Mofst.index
-    Mdata["AoA"] = -Mdata.index
+    # AoA はファイル名の参照迎角から決める（刻み幅が 1° 以外でも正しくなる）。
+    # 旧実装は行番号（index）を使っていたため、刻み幅 1° 以外で角度がずれていた。
+    Pofst["AoA"] = [angle_from_name(n, +1) for n in Pofst["name"]]
+    Pdata["AoA"] = [angle_from_name(n, +1) for n in Pdata["name"]]
+    Mofst["AoA"] = [angle_from_name(n, -1) for n in Mofst["name"]]
+    Mdata["AoA"] = [angle_from_name(n, -1) for n in Mdata["name"]]
 
     data_wind = pd.read_csv("windspeed.csv", skiprows=2)
     rho = float(pd.read_csv("windspeed.csv", header=None).iloc[0, 1])
-    S = 0.04  # 翼面積 [m²]
+    S = 0.04  # 翼面積 [m^2]
     U_P, U_M, q_P, q_M = [], [], [], []
     for i in range(len(data_wind)):
         if "Pdata" in data_wind.loc[i, "name"] and data_wind.loc[i, "name"].endswith("00.00"):
@@ -211,14 +295,17 @@ def calc():
     Mofst = pd.read_csv("Mofst_Ncm.csv", index_col=0)
     Pdata = pd.read_csv("Pdata_Ncm.csv", index_col=0)
     Mdata = pd.read_csv("Mdata_Ncm.csv", index_col=0)
-    Pdata.loc[:, "Fx":"Mz"] = Pdata.loc[:, "Fx":"Mz"] - Pofst.loc[:, "Fx":"Mz"]
-    Mdata.loc[:, "Fx":"Mz"] = Mdata.loc[:, "Fx":"Mz"] - Mofst.loc[:, "Fx":"Mz"]
+    _C6 = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+    Pdata[_C6] = Pdata[_C6].astype(float) - Pofst[_C6].astype(float)
+    Mdata[_C6] = Mdata[_C6].astype(float) - Mofst[_C6].astype(float)
     data = pd.concat([Mdata.iloc[::-1], Pdata], ignore_index=True)
 
     # 空力中心まわり
+    _CF = ["Fx", "Fy", "Fz"]
+    _CM = ["Mx", "My", "Mz"]
     F_adcenter_gf = data.copy()
-    F_adcenter_gf.loc[:, "Fx":"Fz"] = data.loc[:, "Fx":"Fz"] / 9.8 * 1000      # N → gf
-    F_adcenter_gf.loc[:, "Mx":"Mz"] = data.loc[:, "Mx":"Mz"] / 9.8 * 1000 / 10  # Nm → gf10cm
+    F_adcenter_gf[_CF] = data[_CF].astype(float) / 9.8 * 1000        # N → gf
+    F_adcenter_gf[_CM] = data[_CM].astype(float) / 9.8 * 1000 * 10   # Nm → gf10cm
     calbmatrix = np.matrix([
         [1, 0, 0, 0, 0, 0],
         [0, 0, 1, 0, 0, 0],
@@ -239,8 +326,8 @@ def calc():
         F_adcenter_gf.loc[i, "My"] = F[0, 4]
         F_adcenter_gf.loc[i, "Mz"] = F[0, 5]
     F_adcenter = F_adcenter_gf
-    F_adcenter.loc[:, "Fx":"Fz"] = F_adcenter.loc[:, "Fx":"Fz"] * 9.8 / 1000        # gf → N
-    F_adcenter.loc[:, "Mx":"Mz"] = F_adcenter.loc[:, "Mx":"Mz"] * 9.8 / 1000 / 10   # gf10cm → Nm
+    F_adcenter[_CF] = F_adcenter[_CF].astype(float) * 9.8 / 1000        # gf → N
+    F_adcenter[_CM] = F_adcenter[_CM].astype(float) * 9.8 / 1000 / 10   # gf10cm → Nm
     F_adcenter = F_adcenter.rename(
         columns={"Fx": "F1", "Fy": "F2", "Fz": "F3", "Mx": "F4", "My": "F5", "Mz": "F6"}
     )
@@ -287,7 +374,7 @@ def plot_C_raw():
     ax.grid(True)
     ax.plot(C_aero.loc[:, "AoA"], C_aero.loc[:, "Cl"],
             color="royalblue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_l$", fontsize=textsize)
     fig.savefig("Cl_raw.png", bbox_inches="tight")
@@ -298,7 +385,7 @@ def plot_C_raw():
     ax.grid(True)
     ax.plot(C_aero.loc[:, "AoA"], C_aero.loc[:, "Cd"],
             color="royalblue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_d$", fontsize=textsize)
     fig.savefig("Cd_raw.png", bbox_inches="tight")
@@ -309,7 +396,7 @@ def plot_C_raw():
     ax.grid(True)
     ax.plot(C_aero.loc[:, "AoA"], C_aero.loc[:, "Cm"],
             color="royalblue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_m$", fontsize=textsize)
     fig.savefig("Cm_raw.png", bbox_inches="tight")
@@ -353,7 +440,7 @@ def plot_C_aero():
     ax.plot(x, 2 * np.pi * np.pi / 180 * x,
             color="gray", label=r"$C_{l_{\alpha}}=2\pi$",
             linestyle="--", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_ylim(-1.0, 1.0)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_l$", fontsize=textsize)
@@ -366,7 +453,7 @@ def plot_C_aero():
     ax.grid(True)
     ax.plot(data.loc[:, "AoA_mod"], data.loc[:, "Cd"],
             color="blue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_ylim(0, 0.3)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_d$", fontsize=textsize)
@@ -378,7 +465,7 @@ def plot_C_aero():
     ax.grid(True)
     ax.plot(data.loc[:, "AoA_mod"], data.loc[:, "Cm"],
             color="blue", marker="^", linewidth=lw, markersize=mk)
-    ax.set_xlim(-20, 20)
+    ax.set_xlim(-30, 30)
     ax.set_ylim(-0.2, 0.2)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_m$", fontsize=textsize)
@@ -400,22 +487,35 @@ def plot_C_aero():
 
 def plot_PM():
     data = pd.read_csv("C_aero.csv", delimiter=",")
+
+    # P-M 比較は正負両方のデータが前提。片側のみ（正のみ／負のみ）の計測では
+    # 左右対称に分割できないためスキップする。
+    if (data["AoA"] > 0).sum() == 0 or (data["AoA"] < 0).sum() == 0:
+        print("[plot_PM] 片側のみの計測のため P-M 比較図はスキップします。")
+        return
+
     textsize = 24
     lw = 3
     mk = 8
 
+    # data = [Mdata_reversed, Pdata] で両者は同数。先半分が負迎角、後半分が正迎角。
+    n = len(data) // 2   # = max_angle + 1
+    max_aoa = n - 1
+    pos = data.loc[n:].reset_index(drop=True)   # 正迎角 (AoA 0 〜 max)
+    neg = data.loc[:n - 1].reset_index(drop=True)  # 負迎角 (AoA -max 〜 0, 反転済み)
+
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.tick_params(labelsize=textsize)
     ax.grid(True)
-    ax.plot(data.loc[21:, "AoA_mod"], data.loc[21:, "Cl"],
+    ax.plot(pos.loc[:, "AoA_mod"], pos.loc[:, "Cl"],
             color="red", marker="^", linewidth=lw, markersize=mk, label="Positive")
-    ax.plot(-data.loc[:20, "AoA_mod"], -data.loc[:20, "Cl"],
+    ax.plot(-neg.loc[:, "AoA_mod"], -neg.loc[:, "Cl"],
             color="blue", marker="^", linewidth=lw, markersize=mk, label="Negative")
-    x = np.arange(-30, 30)
+    x = np.arange(0, max_aoa + 1)
     ax.plot(x, 2 * np.pi * np.pi / 180 * x,
             color="gray", label=r"$C_{l_{\alpha}}=2\pi$",
             linestyle="--", linewidth=lw, markersize=mk)
-    ax.set_xlim(0, 20)
+    ax.set_xlim(0, max_aoa)
     ax.set_ylim(0, 1.0)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_l$", fontsize=textsize)
@@ -426,11 +526,11 @@ def plot_PM():
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.tick_params(labelsize=textsize)
     ax.grid(True)
-    ax.plot(data.loc[21:, "AoA_mod"], data.loc[21:, "Cd"],
+    ax.plot(pos.loc[:, "AoA_mod"], pos.loc[:, "Cd"],
             color="red", marker="^", linewidth=lw, markersize=mk, label="Positive")
-    ax.plot(-data.loc[:20, "AoA_mod"], data.loc[:20, "Cd"],
+    ax.plot(-neg.loc[:, "AoA_mod"], neg.loc[:, "Cd"],
             color="blue", marker="^", linewidth=lw, markersize=mk, label="Negative")
-    ax.set_xlim(0, 20)
+    ax.set_xlim(0, max_aoa)
     ax.set_ylim(0, 0.3)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_d$", fontsize=textsize)
@@ -441,17 +541,78 @@ def plot_PM():
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.tick_params(labelsize=textsize)
     ax.grid(True)
-    ax.plot(data.loc[21:, "AoA_mod"], data.loc[21:, "Cm"],
+    ax.plot(pos.loc[:, "AoA_mod"], pos.loc[:, "Cm"],
             color="red", marker="^", linewidth=lw, markersize=mk, label="Positive")
-    ax.plot(-data.loc[:20, "AoA_mod"], -data.loc[:20, "Cm"],
+    ax.plot(-neg.loc[:, "AoA_mod"], -neg.loc[:, "Cm"],
             color="blue", marker="^", linewidth=lw, markersize=mk, label="Negative")
-    ax.set_xlim(0, 20)
+    ax.set_xlim(0, max_aoa)
     ax.set_ylim(-0.2, 0.2)
     ax.set_xlabel("AoA [deg]", fontsize=textsize)
     ax.set_ylabel(r"$C_m$", fontsize=textsize)
     ax.legend(fontsize=20)
     fig.savefig("Cm_PM.png", bbox_inches="tight")
     plt.close()
+
+
+def report_zero_lift():
+    """C_aero_raw の線形域から α0（ゼロ揚力角）を推定し、
+    次回実験に向けた ORIGIN_PULSE 推奨値をターミナルに出力する。
+
+    推定範囲: AoA = -5° 〜 +10°（失速前の線形域）
+    推奨値  : ORIGIN_PULSE_next = ORIGIN_PULSE - round(α0 × PULSE_PER_DEG)
+    """
+    # 前回実行のレポートが残ると、データ不足でスキップした場合に
+    # 古い推奨値が y/n プロンプトに出てしまうため、先に削除しておく。
+    try:
+        os.remove("zero_lift_report.json")
+    except FileNotFoundError:
+        pass
+
+    data = pd.read_csv("C_aero_raw.csv")
+
+    mask = (data["AoA"] >= -5) & (data["AoA"] <= 10)
+    sub  = data[mask].dropna(subset=["AoA", "Cl"])
+
+    if len(sub) < 4:
+        print("[report_zero_lift] 線形域のデータ点が不足しています。スキップします。")
+        return
+
+    p      = np.polyfit(sub["AoA"], sub["Cl"], 1)   # p[0]=slope, p[1]=intercept
+    alpha0 = -p[1] / p[0]                            # Cl=0 となる AoA [度]
+    Cl_at0 = float(np.polyval(p, 0))
+
+    correction = round(alpha0 * PULSE_PER_DEG)
+    suggested  = ORIGIN_PULSE - correction
+
+    sep = "=" * 56
+    print(sep)
+    print("  ゼロ揚力角 (α0) 推定レポート")
+    print(sep)
+    print(f"  回帰範囲          : AoA = {sub['AoA'].min():.0f}° 〜 {sub['AoA'].max():.0f}°")
+    print(f"  Cl スロープ       : {p[0]:.4f} /°  ({p[0]*180/math.pi:.4f} /rad)")
+    print(f"  α0                : {alpha0:+.3f}°   [Cl(0°) = {Cl_at0:+.4f}]")
+    print(sep)
+    print(f"  計測時の原点パルス: {ORIGIN_PULSE} pulse  (experiment_log → config.json の順で取得)")
+    print(f"  補正量            : {correction:+d} pulse  ({alpha0:+.3f}°)")
+    print(f"  次回推奨 origin   : {suggested} pulse")
+    print(sep)
+
+    # MATLAB 側（run_postprocess.m）が読み取り、y/n で config.json を更新する用のレポート。
+    report = {
+        "alpha0_deg":            round(float(alpha0), 4),
+        "Cl_slope_per_deg":      round(float(p[0]), 6),
+        "current_origin_pulse":  int(ORIGIN_PULSE),
+        "suggested_origin_pulse": int(suggested),
+        "correction_pulse":      int(correction),
+        "pulse_per_deg":         int(PULSE_PER_DEG),
+    }
+    try:
+        with open("zero_lift_report.json", "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        print("  → ゼロ揚力角レポートを zero_lift_report.json に保存しました。")
+    except OSError as e:
+        print(f"  [警告] zero_lift_report.json を保存できませんでした: {e}")
+    print(sep)
 
 
 average()
@@ -461,3 +622,4 @@ plot_C_raw()
 calb()
 plot_C_aero()
 plot_PM()
+report_zero_lift()

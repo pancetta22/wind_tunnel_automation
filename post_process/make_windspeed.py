@@ -37,7 +37,7 @@ make_windspeed.py
     --offset      差圧センサ零点オフセット [mV]（デフォルト: -5.0）
     --a           変換係数 a [cm/mV]（デフォルト: 0.007904809948345278）
     --b           変換係数 b [cm]（デフォルト: -0.340200009144243）
-    --water_dens  水密度 [g/cm³]（デフォルト: 0.99704）
+    --water_dens  水密度 [g/cm^3]（デフォルト: 0.99704）
 
   出力:
     --out         windspeed.csv の保存先フォルダ（省略時: カレントディレクトリ）
@@ -59,6 +59,15 @@ import os
 import sys
 
 import pandas as pd
+
+# 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする安全網。
+# 日本語Windows(cp932)など、出力先が表現できない文字を含む print があっても
+# UnicodeEncodeError で中断せず、その文字を置換して続行する。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
 
 
 # ============================================================
@@ -83,10 +92,10 @@ def mV_to_U(mV: float, rho: float,
 
     U = sqrt(2 * water_density * ((mV - offset) * a + b) * g / rho)
 
-    ※ water_density は g/cm³ 単位、h = (mV-offset)*a + b は cm 単位で
+    ※ water_density は g/cm^3 単位、h = (mV-offset)*a + b は cm 単位で
        数値的に等価な計算を行っている（Excel セル C11, C15, C16 参照）。
     """
-    G = 9.80665  # 重力加速度 [m/s²]
+    G = 9.80665  # 重力加速度 [m/s^2]
     h = (mV - offset_mV) * a + b  # 水柱高さ相当値 [cm]
     inner = 2.0 * water_density * h * G / rho
     if inner <= 0:
@@ -132,7 +141,7 @@ def main():
     parser.add_argument("--b",          type=float, default=None,
                         help="変換係数 b [cm]（デフォルト: -0.340）")
     parser.add_argument("--water_dens", type=float, default=None,
-                        help="水密度 [g/cm³]（デフォルト: 0.99704）")
+                        help="水密度 [g/cm^3]（デフォルト: 0.99704）")
     # 出力先
     parser.add_argument("--out",        default=None,
                         help="windspeed.csv の保存先フォルダ（省略時: カレントディレクトリ）")
@@ -185,10 +194,10 @@ def main():
     # 空気密度の決定
     if "rho_kg_m3" in log and args.temp is None and args.pressure is None:
         rho = float(log["rho_kg_m3"])
-        print(f"[パラメータ] ρ = {rho:.6f} kg/m³（ログから読み込み）")
+        print(f"[パラメータ] ρ = {rho:.6f} kg/m^3（ログから読み込み）")
     elif T_C is not None and P_mmHg is not None:
         rho = calc_rho(T_C, P_mmHg)
-        print(f"[パラメータ] T = {T_C}℃, P = {P_mmHg} mmHg → ρ = {rho:.6f} kg/m³")
+        print(f"[パラメータ] T = {T_C}℃, P = {P_mmHg} mmHg → ρ = {rho:.6f} kg/m^3")
     else:
         print("[エラー] 空気密度を決定できません。--temp と --pressure を指定してください。",
               file=sys.stderr)
@@ -206,7 +215,7 @@ def main():
             print(f"[警告] {fname} が見つかりません。スキップします。")
             continue
 
-        df = pd.read_csv(fpath, encoding="utf-8")
+        df = pd.read_csv(fpath, encoding="utf-8-sig")
 
         required = ["name", "差圧電圧[mV]"]
         missing = [c for c in required if c not in df.columns]

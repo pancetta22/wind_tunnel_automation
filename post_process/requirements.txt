@@ -1,0 +1,6 @@
+pandas
+numpy
+scipy
+matplotlib
+tqdm
+python-pptx

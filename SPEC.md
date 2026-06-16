@@ -427,6 +427,10 @@ for i in range(case_num):
 
 本システムの実装にあたり、以下のファイルを新規作成・改修する。
 
+> **注（2026-06）**: 以下は設計時の構成。実装後にフォルダ整理を行い、現在は
+> ヘルパ類を `measurement_control/`、診断ツールを `diagnostics/` に配置している。
+> **現在のディレクトリ構成は README.md を参照。**
+
 ```
 Windy/
 ├── run_experiment.m                ★ 新規  メイン実験スクリプト

@@ -3,6 +3,22 @@
 MATLAB + Python による風洞実験の自動計測・制御システムです。
 迎角ステージ（QT-ADL1）と6軸力覚センサ（Leptrino）、デジタルマルチメータ（R6441B）を統合して実験を制御します。
 
+## クイックスタート（最短手順）
+
+```matlab
+% 1. config.json.example をコピーして config.json を作り、COMポート等を設定（初回のみ）
+% 2. MATLAB でリポジトリのフォルダに cd して：
+run_experiment
+```
+
+あとは画面の指示に従うだけ（気温・気圧 → 迎角範囲 → 計測 → 後処理・グラフ生成まで自動）。
+よく使うコマンドは他に2つ：
+
+```matlab
+setup_paths                                  % 診断ツールを単体で使う前に1回実行
+run_postprocess('C:\...\WindyData\実験名')    % 後処理だけをやり直す／過去実験を再処理する
+```
+
 ---
 
 ## 構成機器
@@ -76,23 +92,57 @@ C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe
 
 ```
 Windy/
+├── run_experiment.m            # メイン実験スクリプト（これを実行）
+├── run_postprocess.m           # 後処理だけを単体で（再）実行
+├── setup_paths.m               # 診断ツール等を単体で使う前に実行（パス追加）
 ├── config.json.example         # 設定ファイルのテンプレート
 ├── config.json                 # 各自の設定（Git管理外）
+├── README.md / SPEC.md
 │
-├── QT_ADL1.m                   # 迎角ステージ ドライバクラス
-├── QT_ADL1_check_connection.m  # 迎角ステージ 接続確認スクリプト
+├── measurement_control/        # run_experiment が使う計測機器ヘルパ
+│   ├── QT_ADL1.m               #   迎角ステージ ドライバクラス
+│   ├── LeptrinoLogger.m        #   Leptrino 6軸センサ 時系列ロガークラス
+│   ├── WindyMonitor.m          #   リアルタイムモニタ表示クラス
+│   ├── make_filename.m         #   ファイル名生成ユーティリティ
+│   ├── get_sensor_data.m       #   Leptrinoセンサ データ取得関数
+│   └── get_voltage.m           #   R6441B デジタルマルチメータ データ取得
 │
-├── get_sensor_data.m           # Leptrinoセンサ データ取得関数
-├── get_voltage.m               # R6441B デジタルマルチメータ データ取得スクリプト
+├── diagnostics/                # 手動で実行する接続確認・診断ツール
+│   ├── QT_ADL1_check_connection.m  # 迎角ステージ 接続確認
+│   ├── check_sensor_limit.m        # 力センサ定格確認
+│   ├── weight_check.m              # 既知荷重による力センサ確認
+│   ├── tare_measure.m              # ゼロ点基準 6軸力測定
+│   └── lumix_check_connection.py   # カメラ接続確認
 │
-└── leptrino/
-    ├── leptrino_server.py      # Leptrinoセンサ 計測スクリプト（Python）
-    └── CfsUsb.dll              # Leptrino USB ドライバ DLL（32bit）
+├── manual/                     # 操作マニュアルと生成スクリプト
+│   ├── Windy_操作マニュアル.pptx
+│   └── make_manual_pptx.py
+│
+├── leptrino/                   # Leptrinoセンサ 計測スクリプト（Python）
+│   ├── leptrino_server.py
+│   └── CfsUsb.dll              #   Leptrino USB ドライバ DLL（32bit）
+├── post_process/               # 後処理（風速・空力係数・グラフ生成）
+└── analysis/                   # 分析・比較パワポ（自動更新）
 ```
+
+> ※ **本計測（`run_experiment`）はそのまま実行できます**（起動時に自分で
+> `measurement_control` をパスに追加します）。
+>
+> ※ 診断ツールやヘルパ（`QT_ADL1_check_connection` / `weight_check` /
+> `get_sensor_data` 等）を**単体で使うときは、先に一度 `setup_paths` を実行**して
+> ください（measurement_control / diagnostics をパスへ追加します）。
+> 各ツールは `config.json` / `leptrino/` をリポジトリルート基準で参照するため、
+> パスさえ通れば従来どおり関数名・スクリプト名で実行できます。
 
 ---
 
 ## 使い方
+
+> 以下の関数・スクリプトを単体で使う前に、リポジトリのルートで一度実行：
+>
+> ```matlab
+> setup_paths
+> ```
 
 ### 迎角ステージ（QT-ADL1）
 
@@ -150,14 +200,17 @@ stage.sweep(0:1:30, 2.0, @myMeasurementFunc);
 
 #### 座標系について
 
+迎角0°の原点は `config.json` の `origin_pulse`（既定 **11025**）で決まります。
+
 | 迎角 | パルス値 |
 |-----|---------|
-| 0° | 11250 pulse |
-| +1° | 11000 pulse |
-| +θ° | 11250 − θ × 250 pulse |
+| 0° | `origin_pulse`（既定 11025）pulse |
+| +1° | `origin_pulse` − 250 pulse |
+| +θ° | `origin_pulse` − θ × 250 pulse |
 
 - 迎角増加方向 = パルス減少（CCW 方向）
 - 分解能：0.004°/pulse（ARS-936-HP）
+- 実験後にゼロ揚力角から推奨原点が提示され、**y/n で `origin_pulse` を自動更新**できます
 
 ---
 
@@ -213,7 +266,8 @@ MATLAB から Python スクリプト（`leptrino/leptrino_server.py`）をサブ
 | `r6441b_n_samples` | 取得サンプル数 |
 | `r6441b_timeout_sec` | 受信タイムアウト [秒] |
 
-出力ファイル：`pressure_data.csv`（列：`Time_s`, `Pressure_raw`）
+結果はターミナルに表示されます（各サンプル値・平均・標準偏差を V / mV 併記。CSV は出力しません）。
+グラフ（時系列プロット）も表示されるので、計測前のデジボル接触チェック（mV の妥当性確認）に使えます。
 
 > 通信仕様：9600bps / 8bit / パリティなし / ストップビット1 / ハードウェアフロー制御（DTR/DSR）
 
@@ -265,5 +319,7 @@ waitForStop: タイムアウト (30 秒)
 
 - 実験前に必ず `homeReturn()` を実行して機械原点を確定させてください
 - スイープ中にステージを手で止めないでください
+- **計測中に出力CSV（volt_summary 等）を Excel で開かないでください**
+  （ファイルがロックされると、その計測点の電圧平均が記録できません）
 - `config.json` はリポジトリにコミットしないでください（個人の環境情報が含まれます）
 - Leptrino の Python スクリプトは必ず 32bit Python で実行してください

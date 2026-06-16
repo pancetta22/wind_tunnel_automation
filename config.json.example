@@ -1,5 +1,6 @@
 {
   "python_exe":                  "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312-32/python.exe",
+  "python_exe_64":               "C:/Users/<YourName>/AppData/Local/Programs/Python/Python312/python.exe",
   "leptrino_port":               5,
   "qt_adl1_port":                "COM7",
   "r6441b_port":                 "COM6",
@@ -10,8 +11,11 @@
   "angle_settle_sec":            2.0,
   "csv_decimal_places":          null,
 
+  "_comment_origin_pulse":       "迎角0°に対応する機械座標[pulse]。実験後にゼロ揚力角から推奨値が提示され、y/nで自動更新できる",
+  "origin_pulse":                11025,
+
   "_comment_windspeed":          "以下は差圧センサ→風速の変換に使用する校正定数（センサ交換・再校正時のみ変更）",
-  "water_density":               0.99704,
+  "_comment_water_density":      "水密度は気温から Kell の式で自動計算されるため不要",
   "volt_offset_mV":              -5.0,
   "calib_a":                     0.007904809948345278,
   "calib_b":                     -0.340200009144243

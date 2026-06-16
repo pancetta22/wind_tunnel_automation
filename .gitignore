@@ -21,3 +21,8 @@ ENV/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Generated PowerPoint outputs (saved to output_dir, not the repo)
+analysis/Windy*.pptx
+analysis/~$*.pptx
+manual/Windy*.pptx
