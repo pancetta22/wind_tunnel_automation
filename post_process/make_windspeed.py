@@ -246,6 +246,16 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    # 風速が 0 になった点を早めに警告する（差圧電圧が零点オフセットとほぼ同じ）。
+    # 通風していない（テスト計測）か、差圧センサ/デジボルが差圧を拾えていない時に起きる。
+    # この後の calc_force では q=0 の点の空力係数は NaN になる。
+    n_zero = sum(1 for r in rows if float(r["U"]) <= 0.0)
+    if n_zero:
+        print(f"[警告] {n_zero}/{len(rows)} 点で風速 U=0 です"
+              "（差圧電圧が零点オフセットとほぼ同じ＝動圧ゼロ）。\n"
+              "  通風していない、または差圧センサ/デジボルが差圧を読めていない可能性があります。",
+              file=sys.stderr)
+
     # ------ windspeed.csv を書き出す ------
     out_dir  = args.out if args.out else os.getcwd()
     out_path = os.path.join(out_dir, "windspeed.csv")

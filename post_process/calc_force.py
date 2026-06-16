@@ -386,13 +386,29 @@ def calc():
     C_aero = F_aero.rename(
         columns={"L": "Cl", "D": "Cd", "S": "Cs", "R": "Cr", "P": "Cm", "Y": "Cy"}
     )
+    c_chord = 0.20    # 代表長さ（翼弦長 [m]）＝モーメント係数の無次元化に使う
+    n_zero_q = 0
     for i in range(len(C_aero)):
-        C_aero.loc[i, "Cl"] = float(F_aero.loc[i, "L"]) / float(C_aero.loc[i, "q"])
-        C_aero.loc[i, "Cd"] = float(F_aero.loc[i, "D"]) / float(C_aero.loc[i, "q"])
-        C_aero.loc[i, "Cs"] = float(F_aero.loc[i, "S"]) / float(C_aero.loc[i, "q"])
-        C_aero.loc[i, "Cm"] = float(F_aero.loc[i, "P"]) / (float(C_aero.loc[i, "q"]) * 0.20)
-        C_aero.loc[i, "Cr"] = float(F_aero.loc[i, "R"]) / (float(C_aero.loc[i, "q"]) * 0.20)
-        C_aero.loc[i, "Cy"] = float(F_aero.loc[i, "Y"]) / (float(C_aero.loc[i, "q"]) * 0.20)
+        q = float(C_aero.loc[i, "q"])
+        # 動圧 q=0（風速 U=0）の点は無次元化できない。ここで割ると
+        # ZeroDivisionError で後処理全体が落ちるため、クラッシュさせず NaN にする。
+        # （通風なしのテスト計測や、差圧センサ/デジボルが差圧を拾えていない時に起きる）
+        if q <= 0:
+            for col in ("Cl", "Cd", "Cs", "Cm", "Cr", "Cy"):
+                C_aero.loc[i, col] = np.nan
+            n_zero_q += 1
+            continue
+        C_aero.loc[i, "Cl"] = float(F_aero.loc[i, "L"]) / q
+        C_aero.loc[i, "Cd"] = float(F_aero.loc[i, "D"]) / q
+        C_aero.loc[i, "Cs"] = float(F_aero.loc[i, "S"]) / q
+        C_aero.loc[i, "Cm"] = float(F_aero.loc[i, "P"]) / (q * c_chord)
+        C_aero.loc[i, "Cr"] = float(F_aero.loc[i, "R"]) / (q * c_chord)
+        C_aero.loc[i, "Cy"] = float(F_aero.loc[i, "Y"]) / (q * c_chord)
+    if n_zero_q:
+        print(f"[警告] 動圧 q=0（風速 U=0）の計測点が {n_zero_q}/{len(C_aero)} 点あります。"
+              "該当点の空力係数は NaN にしました。\n"
+              "  → 通風していない、または差圧センサ/デジボルが差圧を読めていない可能性があります"
+              "（差圧電圧が零点オフセットとほぼ同じ）。")
     C_aero = C_aero.drop(["U", "q"], axis=1)
     C_aero.to_csv("C_aero_raw.csv")
 
