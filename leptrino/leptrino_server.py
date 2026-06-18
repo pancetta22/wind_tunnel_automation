@@ -52,7 +52,13 @@ parser.add_argument(
     "--size_limit_kb",
     type=float,
     default=1000.0,
-    help="[stream用] この KB を超えたら計測終了（デフォルト: 1000）",
+    help="[stream用] この KB を超えたら計測終了（--time_limit_sec と排他）",
+)
+parser.add_argument(
+    "--time_limit_sec",
+    type=float,
+    default=None,
+    help="[stream用] この秒数が経過したら計測終了（指定時は --size_limit_kb を無視）",
 )
 args = parser.parse_args()
 
@@ -113,11 +119,6 @@ if args.mode == "avg":
 
 # ========================================================
 #  limit モード: 定格値(Limit)と生データ(±10000スケール)を返す
-#
-#  目的: 「定格適用ミス」の診断。物理量は phys = limit/10000 * raw で
-#  計算されるため、GetSensorLimit が返す定格値(limit)が誤って大きいと
-#  すべての力が比例して過大になる。limit と raw を生で出力し、期待値
-#  （SFS080F300M5R0U6: Fx,Fy,Fz=30N / Mx,My,Mz=5Nm）と照合できるようにする。
 # ========================================================
 elif args.mode == "limit":
     N = 100
@@ -134,30 +135,29 @@ elif args.mode == "limit":
     dll.PortClose(PORT)
     dll.Finalize()
 
-    labels  = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+    labels = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
     raw_avg = [sums[i] / ok_count if ok_count else float("nan") for i in range(6)]
-    phys    = [limit_list[i] / 10000.0 * raw_avg[i] for i in range(6)]
-    print(json.dumps({
-        "labels":  labels,
-        "limit":   limit_list,   # GetSensorLimit の返り値（定格）
-        "raw_avg": raw_avg,      # 生データ（定格を10000とした割合）
-        "phys":    phys,         # 物理量 = limit/10000 * raw
-        "n":       ok_count,
-    }))
+    phys = [limit_list[i] / 10000.0 * raw_avg[i] for i in range(6)]
+    print(
+        json.dumps(
+            {
+                "labels": labels,
+                "limit": limit_list,
+                "raw_avg": raw_avg,
+                "phys": phys,
+                "n": ok_count,
+            }
+        )
+    )
 
 # ========================================================
-#  stream モード: 時系列CSVを書き出し、サイズ上限で終了
+#  stream モード: 時系列CSVを書き出し、条件に応じて終了
 #
-#  【修正点】SetSerialMode直後はDLL内部バッファに古いデータが
-#  蓄積しており、ループ開始直後だけ高速（3000Hz超）で返ってしまう。
-#  これをドレイン（flush）してからt=0を決定することで、
-#  ファイル先頭から均一な~1200Hzのタイムスタンプが記録される。
+#  終了条件（排他）:
+#    --time_limit_sec N  : N秒経過で終了（フラッター実験用）
+#    --size_limit_kb  N  : NKB超過で終了（定常空力実験用・既存動作）
 #
-#  固定タイマ（ビジーウェイト）は使わない。
-#  GetSerialDataはセンサの更新を待って返るため、
-#  タイトループで呼ぶだけで自然にセンサレート（~1200Hz）に追従する。
-#  固定タイマを使うとセンサの実レートとのズレがビート周波数として
-#  スペクトルに偽ピークを生む（フラッター計測では致命的）。
+#  【バッファドレイン → t=0決定 → イベント駆動ループ】の構造は変更なし。
 # ========================================================
 elif args.mode == "stream":
     if not args.output:
@@ -167,7 +167,14 @@ elif args.mode == "stream":
         print(json.dumps({"error": "--output が指定されていません"}))
         sys.exit(1)
 
-    size_limit_bytes = args.size_limit_kb * 1024
+    # 終了条件を確定する
+    use_time_limit = args.time_limit_sec is not None
+    if use_time_limit:
+        time_limit_sec = args.time_limit_sec
+        size_limit_bytes = None  # 使わない
+    else:
+        time_limit_sec = None  # 使わない
+        size_limit_bytes = args.size_limit_kb * 1024
 
     # 定格値を整数表示用に整形（例: 30.0 → "30"、5.0 → "5"）
     def _fmt_limit(v):
@@ -192,27 +199,14 @@ elif args.mode == "stream":
     f.flush()
 
     # ----------------------------------------------------------
-    #  ① 起動直後のバッファドレイン
-    #
-    #  SetSerialMode(True) 後、DLL内部バッファには
-    #  time.sleep(0.2) の 0.2秒分（≈240サンプル）の古いデータが
-    #  蓄積している。これを読み捨ててから計測を開始しないと、
-    #  ファイル先頭だけ異常に短い時刻間隔（3000Hz超）が記録される。
-    #
-    #  DRAIN_SEC = 0.25 s
-    #  SetSerialMode(True) 直前の time.sleep(0.2) の間に
-    #  センサは既にデータを送り続けており、DLL内部バッファには
-    #  約 1200Hz × 0.2s = 240サンプル分が蓄積している。
-    #  これを完全に吐き出すには最低0.2秒のドレインが必要。
-    #  安全マージン0.05秒を加えて 0.25秒とする。
+    #  ① 起動直後のバッファドレイン（既存と同じ・変更なし）
     # ----------------------------------------------------------
     DRAIN_SEC = 0.25
     t_drain = time.perf_counter()
     while time.perf_counter() - t_drain < DRAIN_SEC:
         dll.GetSerialData(PORT, Data, ctypes.byref(Status))
 
-    # ドレイン完了後、次の「新鮮な」サンプルが来るまで待つ。
-    # これにより t=0 がセンサ更新タイミングと一致する。
+    # ドレイン完了後、次の新鮮なサンプルが来るまで待つ
     while not dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
         pass
 
@@ -222,21 +216,15 @@ elif args.mode == "stream":
     sample_count = 0
     t_start = time.perf_counter()
 
-    # ファイルサイズチェックは毎サンプルではなく 120サンプルに1回（約0.1秒ごと）
+    # サイズチェックは120サンプルに1回（時間制限時はサイズチェック不要）
     CHECK_INTERVAL = 120
 
     # ----------------------------------------------------------
     #  ③ イベント駆動ループ
-    #
-    #  sleep や固定タイマは一切使わない。
-    #  GetSerialData がセンサの更新ごとに True を返すので、
-    #  タイトループで呼ぶだけでセンサレートに自然追従する。
-    #  False が返った場合（センサ未更新）は即リトライ。
     # ----------------------------------------------------------
     try:
         while True:
             if not dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
-                # センサがまだ更新していない → 即リトライ
                 continue
 
             elapsed = time.perf_counter() - t_start
@@ -244,7 +232,6 @@ elif args.mode == "stream":
             # 物理量に変換
             phys = [limit_list[i] / 10000.0 * Data[i] for i in range(6)]
 
-            # SPEC準拠フォーマット: 時間=小数4桁, F=小数3桁, M=小数4桁
             line = "{:.4f},{:.3f},{:.3f},{:.3f},{:.4f},{:.4f},{:.4f}\n".format(
                 elapsed,
                 phys[0],
@@ -258,10 +245,16 @@ elif args.mode == "stream":
             f.flush()
             sample_count += 1
 
-            # ファイルサイズ確認
-            if sample_count % CHECK_INTERVAL == 0:
-                if os.path.getsize(args.output) >= size_limit_bytes:
+            # ------ 終了判定 ------
+            if use_time_limit:
+                # 秒数制限: 毎サンプル elapsed を確認（CHECK_INTERVALは不要）
+                if elapsed >= time_limit_sec:
                     break
+            else:
+                # サイズ制限: 120サンプルに1回チェック（既存動作）
+                if sample_count % CHECK_INTERVAL == 0:
+                    if os.path.getsize(args.output) >= size_limit_bytes:
+                        break
 
     finally:
         f.close()
@@ -269,11 +262,12 @@ elif args.mode == "stream":
         dll.PortClose(PORT)
         dll.Finalize()
 
-    # 正常終了を JSON で通知（MATLAB 側が status を確認できるよう）
+    # 正常終了を JSON で通知
     final_size_kb = os.path.getsize(args.output) / 1024
     result = {
         "status": "ok",
         "samples": sample_count,
         "size_kb": round(final_size_kb, 1),
+        "duration_sec": round(elapsed, 2),  # 実際の計測時間（秒数制限時の確認用）
     }
     print(json.dumps(result))
