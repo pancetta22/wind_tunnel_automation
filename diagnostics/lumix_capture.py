@@ -120,10 +120,10 @@ def _http_post(url: str, body: str, soap_action: str,
 
 
 def _soap_post_raw(url: str, body: str, soap_action: str,
-                   timeout: float = 8.0) -> tuple[int | None, str]:
-    """SOAP POST を生ソケットの HTTP/1.0 + Connection: close で送る。
-    Panasonic の組込みUPnPサーバは urllib の HTTP/1.1 だと応答せずハングする
-    ことがある（Browse POST が timed out になる）。HTTP/1.0 で接続終了まで読み切り、
+                   timeout: float = 15.0, http_version: str = "1.1") -> tuple[int | None, str]:
+    """SOAP POST を生ソケットで送り、Connection: close で接続終了まで読み切る。
+    urllib(HTTP/1.1) は keep-alive 待ちでハングし、HTTP/1.0 だと DLNA1.5 サーバが
+    接続を即閉じることがあるため、HTTP/1.1 + Connection: close を既定にする。
     (status, body文字列) を返す。"""
     p = urlparse(url)
     host, port = p.hostname, (p.port or 80)
@@ -132,7 +132,7 @@ def _soap_post_raw(url: str, body: str, soap_action: str,
         path += "?" + p.query
     data = body.encode("utf-8")
     req = (
-        f"POST {path} HTTP/1.0\r\n"
+        f"POST {path} HTTP/{http_version}\r\n"
         f"HOST: {host}:{port}\r\n"
         'CONTENT-TYPE: text/xml; charset="utf-8"\r\n'
         f"CONTENT-LENGTH: {len(data)}\r\n"
@@ -417,9 +417,9 @@ def _browse(control_url: str, object_id: str,
     """ContentDirectory を Browse して (items, containers, total_matches) を返す。
     items/containers は dict のリスト。"""
     soap = _browse_soap(object_id, start, count)
-    # 組込みUPnPサーバ対策で HTTP/1.0(生ソケット)で送る。urllib(HTTP/1.1)だと
-    # Panasonic では応答せずタイムアウトすることがあるため。
-    status, resp = _soap_post_raw(control_url, soap, f"{CDS_TYPE}#Browse")
+    # 組込みUPnPサーバ対策で生ソケット送信（HTTP/1.1 + Connection: close）。
+    # 初回Browseはカメラがインデックス生成で遅いことがあるので timeout は長め。
+    status, resp = _soap_post_raw(control_url, soap, f"{CDS_TYPE}#Browse", timeout=15.0)
     if status != 200 or not resp:
         return [], [], 0
 
@@ -645,28 +645,42 @@ def dlna_diag() -> int:
     control_url = discover_cds_control()
     print(f"[2] 採用する ContentDirectory 制御URL: {control_url}")
 
-    print("[3] 再生モードへ移行して Browse します...")
-    set_playmode()
-    time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
+    # SCPD（対応アクション定義）を確認 — Browse アクションが宣言されているか
+    scpd_url = control_url.replace("CDS_control", "CDS_SCPD")
+    s_st, s_body = _http_get(scpd_url)
+    s_text = (s_body.decode("utf-8", "replace")
+              if isinstance(s_body, (bytes, bytearray)) else str(s_body))
+    print(f"[2.5] SCPD {scpd_url}  status={s_st}, "
+          f"Browseアクション={'有' if '<name>Browse</name>' in s_text else '無'}")
 
-    # Browse POST を複数方式×URLで試し、どれが 200 を返すか確認する。
+    print("[3] 再生モードへ移行して Browse します...")
+    pm = set_playmode()
+    time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
+    _st, _b = cam_get_raw("mode=getstate")
+    try:
+        _mode = ET.fromstring(_b).findtext(".//cammode", default="不明")
+    except ET.ParseError:
+        _mode = "解析失敗"
+    print(f"    playmode設定: {'OK' if pm else 'NG'} / 現在のcammode: {_mode}")
+
+    # Browse POST を複数方式で試し、どれが 200 を返すか確認する（timeout長め）。
     soap = _browse_soap("0", 0, 50)
-    lumix_variant = control_url.replace("/Server0/", "/Lumix/Server0/")
+    BT = 15.0
     trials = [
-        ("urllib HTTP/1.1     ", control_url,
-         lambda u: _http_post(u, soap, f"{CDS_TYPE}#Browse", timeout=6.0)),
-        ("raw    HTTP/1.0     ", control_url,
-         lambda u: _soap_post_raw(u, soap, f"{CDS_TYPE}#Browse", timeout=6.0)),
+        ("urllib HTTP/1.1     ",
+         lambda: _http_post(control_url, soap, f"{CDS_TYPE}#Browse", timeout=BT)),
+        ("raw    HTTP/1.1 close",
+         lambda: _soap_post_raw(control_url, soap, f"{CDS_TYPE}#Browse",
+                                timeout=BT, http_version="1.1")),
+        ("raw    HTTP/1.0 close",
+         lambda: _soap_post_raw(control_url, soap, f"{CDS_TYPE}#Browse",
+                                timeout=BT, http_version="1.0")),
     ]
-    if lumix_variant != control_url:
-        trials.append(("raw    HTTP/1.0(/Lumix)", lumix_variant,
-                       lambda u: _soap_post_raw(u, soap, f"{CDS_TYPE}#Browse", timeout=6.0)))
-    print("[4] Browse(ObjectID='0') を複数方式で試行:")
-    for label, url, fn in trials:
-        st, resp = fn(url)
-        head = resp[:160].replace("\n", " ").replace("\r", " ")
-        print(f"    [{label}] {url}")
-        print(f"        -> status={st}, {len(resp)} chars  先頭: {head!r}")
+    print(f"[4] Browse(ObjectID='0') を複数方式で試行（各 timeout={BT:.0f}s）:")
+    for label, fn in trials:
+        st, resp = fn()
+        head = resp[:200].replace("\n", " ").replace("\r", " ")
+        print(f"    [{label}] -> status={st}, {len(resp)} chars  先頭: {head!r}")
 
     print("[5] ContentDirectory の木構造（raw HTTP/1.0 で取得）:")
 
