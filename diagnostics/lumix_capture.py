@@ -612,10 +612,12 @@ def capture_series(out_dir: str, base_name: str, count: int) -> bool:
 # ============================================================
 #  DLNA 構成診断（--diag）
 # ============================================================
-def dlna_diag() -> int:
+def dlna_diag(skip_mode: bool = False) -> int:
     """DLNA 構成を診断して表示する（画像を保存できない時の原因切り分け用）。
     ddd.xml の探索結果・制御URL・Browse の生ステータス・木構造を出力する。
-    カメラに写真がある状態で実行し、出力を共有してもらえれば構成を特定できる。"""
+    カメラに写真がある状態で実行し、出力を共有してもらえれば構成を特定できる。
+    skip_mode=True: cam.cgi のモード切替(recmode/playmode)をせず、カメラが既に
+    DLNA配信モード（「カメラ内の画像を送る」等）である前提で SSDP+Browse だけ試す。"""
     print("=== DLNA 構成診断 ===")
 
     print("[0] SSDP でデバイス記述(LOCATION)を探索:")
@@ -653,19 +655,22 @@ def dlna_diag() -> int:
     print(f"[2.5] SCPD {scpd_url}  status={s_st}, "
           f"Browseアクション={'有' if '<name>Browse</name>' in s_text else '無'}")
 
-    print("[3] 再生モードへ移行して Browse します...")
-    pm = set_playmode()
-    time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
-    _st, _b = cam_get_raw("mode=getstate")
-    try:
-        _mode = ET.fromstring(_b).findtext(".//cammode", default="不明")
-    except ET.ParseError:
-        _mode = "解析失敗"
-    print(f"    playmode設定: {'OK' if pm else 'NG'} / 現在のcammode: {_mode}")
+    if skip_mode:
+        print("[3] DLNA配信モード前提: cam.cgi のモード切替はスキップします。")
+    else:
+        print("[3] 再生モードへ移行して Browse します...")
+        pm = set_playmode()
+        time.sleep(3.0)   # 再生モードのDLNA(DMS)が立ち上がるまで待つ
+        _st, _b = cam_get_raw("mode=getstate")
+        try:
+            _mode = ET.fromstring(_b).findtext(".//cammode", default="不明")
+        except ET.ParseError:
+            _mode = "解析失敗"
+        print(f"    playmode設定: {'OK' if pm else 'NG'} / 現在のcammode: {_mode}")
 
     # Browse POST を複数方式で試し、どれが 200 を返すか確認する（timeout長め）。
     soap = _browse_soap("0", 0, 50)
-    BT = 15.0
+    BT = 8.0
     trials = [
         ("urllib HTTP/1.1     ",
          lambda: _http_post(control_url, soap, f"{CDS_TYPE}#Browse", timeout=BT)),
@@ -677,10 +682,22 @@ def dlna_diag() -> int:
                                 timeout=BT, http_version="1.0")),
     ]
     print(f"[4] Browse(ObjectID='0') を複数方式で試行（各 timeout={BT:.0f}s）:")
+    any_ok = False
     for label, fn in trials:
         st, resp = fn()
         head = resp[:200].replace("\n", " ").replace("\r", " ")
         print(f"    [{label}] -> status={st}, {len(resp)} chars  先頭: {head!r}")
+        if st == 200:
+            any_ok = True
+
+    if not any_ok:
+        print("[5] 全方式で Browse に無応答のため、木構造の取得はスキップします。")
+        print("    制御URL・Browseアクション・再生モードは正常なのに CDS が無応答です。")
+        print("    → カメラがリモート操作セッション中は DLNA で内容を返さない可能性大。")
+        print("       VLC等の標準DLNAクライアントでカメラを参照できるか確認してください。")
+        if not skip_mode:
+            set_recmode()
+        return 1
 
     print("[5] ContentDirectory の木構造（raw HTTP/1.0 で取得）:")
 
@@ -705,7 +722,8 @@ def dlna_diag() -> int:
     if total_items == 0:
         print("    → カメラに画像が無いか、Browse 構成が想定と異なります。")
         print("       カメラのSDに写真があるか確認し、[1]〜[5] の出力を共有してください。")
-    set_recmode()
+    if not skip_mode:
+        set_recmode()
     return 0 if total_items > 0 else 1
 
 
@@ -725,7 +743,15 @@ def main() -> int:
                         help="撮影枚数（--out 指定時、既定1）")
     parser.add_argument("--diag", action="store_true",
                         help="DLNA構成を診断して表示する（画像を保存できない時の原因切り分け）")
+    parser.add_argument("--dlna-only", action="store_true",
+                        help="cam.cgi接続せずDLNAのSSDP+Browseだけ試す"
+                             "（カメラを「カメラ内の画像を送る」モードにして使う）")
     args = parser.parse_args()
+
+    # --dlna-only: cam.cgi接続(accctrl/recmode)を行わず、DLNAだけ確認する。
+    # カメラを「カメラ内の画像を送る」等のDLNA配信モードにして使う。
+    if args.dlna_only:
+        return dlna_diag(skip_mode=True)
 
     print("接続中...")
     if not connect():
