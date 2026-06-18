@@ -665,7 +665,7 @@ def dlna_diag() -> int:
 
     # Browse POST を複数方式で試し、どれが 200 を返すか確認する（timeout長め）。
     soap = _browse_soap("0", 0, 50)
-    BT = 15.0
+    BT = 8.0
     trials = [
         ("urllib HTTP/1.1     ",
          lambda: _http_post(control_url, soap, f"{CDS_TYPE}#Browse", timeout=BT)),
@@ -677,10 +677,21 @@ def dlna_diag() -> int:
                                 timeout=BT, http_version="1.0")),
     ]
     print(f"[4] Browse(ObjectID='0') を複数方式で試行（各 timeout={BT:.0f}s）:")
+    any_ok = False
     for label, fn in trials:
         st, resp = fn()
         head = resp[:200].replace("\n", " ").replace("\r", " ")
         print(f"    [{label}] -> status={st}, {len(resp)} chars  先頭: {head!r}")
+        if st == 200:
+            any_ok = True
+
+    if not any_ok:
+        print("[5] 全方式で Browse に無応答のため、木構造の取得はスキップします。")
+        print("    制御URL・Browseアクション・再生モードは正常なのに CDS が無応答です。")
+        print("    → カメラがリモート操作セッション中は DLNA で内容を返さない可能性大。")
+        print("       VLC等の標準DLNAクライアントでカメラを参照できるか確認してください。")
+        set_recmode()
+        return 1
 
     print("[5] ContentDirectory の木構造（raw HTTP/1.0 で取得）:")
 
