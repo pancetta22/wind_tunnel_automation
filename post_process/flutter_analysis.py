@@ -1,0 +1,638 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+flutter_analysis.py  フラッター実験 後処理スクリプト
+
+【入力フォルダ構造】
+  WindyData/
+  ├ 260620_flexible_ofst/          Pofst / Mofst（共有オフセット）
+  │   ├ data/
+  │   └ YYYYMMDD_experiment_log.json
+  ├ 260620_flexible_c01/           風速条件①
+  │   ├ data/
+  │   └ YYYYMMDD_experiment_log.json  ← ofst_dir / rep_windspeed_U を含む
+  └ 260620_flexible_c02/           風速条件②
+
+【実行方法】
+  # 全条件を一括処理（フラッター発生マップまで出力）
+  python flutter_analysis.py --base_dir C:/WindyData/260620_flexible
+
+  # 1条件だけ処理（途中確認用）
+  python flutter_analysis.py --exp_dir C:/WindyData/260620_flexible_c01
+
+【出力】
+  Layer 1: 計測点ごとの詳細（各 cXX/figures/ フォルダ）
+    - 時系列波形（生 / Pofst補正済み / 平均引き済みの3バージョン）
+    - RMSの時間推移（LCO収束確認用）
+    - PSDスペクトル（Welch法、Fy・Mz）
+
+  Layer 2: 条件ごとのサマリー（各 cXX/ フォルダ）
+    - flutter_summary.csv
+      迎角, RMS_Fy, RMS_Mz, freq_Fy, freq_Mz, flutter_A_Fy, flutter_A_Mz,
+      flutter_B_Fy, flutter_B_Mz
+      （A=振幅閾値判定, B=スペクトルピーク判定）
+
+  Layer 3: 全条件のマップ（--base_dir 指定時）
+    - flutter_map_Fy.png / flutter_map_Mz.png
+      風速×迎角のフラッター発生マップ
+
+【フラッター判定の2ルート】
+  ルートA（振幅閾値）: RMS > threshold_rms  [N] or [Nm]
+  ルートB（スペクトルピーク）: 卓越ピークが背景レベルより peak_snr_db [dB] 以上高い
+
+  threshold_rms と peak_snr_db は --threshold_rms / --peak_snr_db で変更可能。
+  デフォルトは保守的な値にしてあるため、実験データを見てから調整する。
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import warnings
+
+import numpy as np
+import pandas as pd
+from scipy import interpolate, signal
+import matplotlib
+matplotlib.use("Agg")   # GUIなし環境でも動作
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+# 端末/MATLAB の system() 経由でも文字エンコードで落ちないようにする
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+
+
+# ============================================================
+#  定数
+# ============================================================
+FS_TARGET   = 1200.0    # リサンプリング後のサンプリング周波数 [Hz]
+HEADER_ROWS = 4         # Leptrino CSV のヘッダ行数
+COL_NAMES   = ["t", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
+
+# フラッター成分抽出用ハイパスフィルタ
+HP_CUTOFF_HZ = 1.0      # 1 Hz 以下をDCドリフトとして除去
+
+# LCO収束確認用の時間窓
+RMS_WINDOW_SEC  = 1.0   # 窓幅 [秒]
+RMS_OVERLAP     = 0.5   # オーバーラップ率
+
+
+# ============================================================
+#  コマンドライン引数
+# ============================================================
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="フラッター実験後処理スクリプト（Windy）"
+    )
+    grp = p.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--base_dir", help="実験ベースフォルダ（_ofst / _c01 / _c02 ... の親）")
+    grp.add_argument("--exp_dir",  help="単一条件フォルダ（_c01 など）")
+
+    p.add_argument("--threshold_rms", type=float, default=None,
+                   help="ルートA: フラッター判定のRMS閾値 [N or Nm]（デフォルト: 自動推定）")
+    p.add_argument("--peak_snr_db",   type=float, default=10.0,
+                   help="ルートB: ピークが背景より何dB高ければフラッターとみなすか（デフォルト: 10）")
+    p.add_argument("--hp_cutoff",     type=float, default=HP_CUTOFF_HZ,
+                   help=f"ハイパスフィルタのカットオフ周波数 [Hz]（デフォルト: {HP_CUTOFF_HZ}）")
+    p.add_argument("--rms_window",    type=float, default=RMS_WINDOW_SEC,
+                   help=f"LCO収束確認用の窓幅 [秒]（デフォルト: {RMS_WINDOW_SEC}）")
+    return p.parse_args()
+
+
+# ============================================================
+#  ユーティリティ
+# ============================================================
+def load_log(exp_dir):
+    """experiment_log.json を読む。複数あれば最新を使う。"""
+    logs = sorted(
+        [f for f in os.listdir(exp_dir) if f.endswith("_experiment_log.json")]
+    )
+    if not logs:
+        raise FileNotFoundError(f"experiment_log.json が見つかりません: {exp_dir}")
+    path = os.path.join(exp_dir, logs[-1])
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_csv(path):
+    """Leptrino CSV（CP932・4行ヘッダ）を読んで DataFrame を返す。"""
+    df = pd.read_csv(
+        path, skiprows=HEADER_ROWS, names=COL_NAMES,
+        encoding="cp932", dtype=float
+    )
+    return df.dropna().reset_index(drop=True)
+
+
+def angle_from_name(fname):
+    """ファイル名から (ref_angle, suffix) を取り出す。
+    例: 20260620_123456_260620_Pdata_15.01.csv → (15, 1)
+    """
+    m = re.search(r"_(\d+)\.(\d{2})\.csv$", fname)
+    if not m:
+        return None, None
+    return int(m.group(1)), int(m.group(2))
+
+
+def phase_sign(fname):
+    """Pdata → +1, Mdata → -1"""
+    return -1 if "_Mdata_" in fname else +1
+
+
+def resample_uniform(t, x, fs=FS_TARGET):
+    """不均一タイムスタンプの時系列を均一グリッドへスプライン補間する。
+
+    センサ実レート（≈1209 Hz）とPCタイマの差によるビート周波数偽ピークを
+    防ぐためのリサンプリング（添付資料の指摘事項への対処）。
+    """
+    t_uniform = np.arange(t[0], t[-1], 1.0 / fs)
+    f_interp  = interpolate.interp1d(t, x, kind="cubic", bounds_error=False,
+                                      fill_value="extrapolate")
+    return t_uniform, f_interp(t_uniform)
+
+
+def highpass(x, cutoff_hz, fs=FS_TARGET, order=4):
+    """ハイパスフィルタ（DCドリフト除去）。"""
+    sos = signal.butter(order, cutoff_hz, fs=fs, btype="high", output="sos")
+    return signal.sosfiltfilt(sos, x)
+
+
+def calc_psd(x, fs=FS_TARGET, nperseg=2048):
+    """Welch 法で PSD を推定する。"""
+    freqs, psd = signal.welch(x, fs=fs, nperseg=min(nperseg, len(x)))
+    return freqs, psd
+
+
+def dominant_freq(freqs, psd, fmin=1.0, fmax=500.0):
+    """指定周波数範囲内でパワーが最大の周波数を返す。"""
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(mask):
+        return np.nan
+    idx = np.argmax(psd[mask])
+    return freqs[mask][idx]
+
+
+def flutter_judge_A(rms, threshold):
+    """ルートA: RMS が閾値を超えたらフラッター有。"""
+    if threshold is None:
+        return None   # 閾値未設定 → 判定保留
+    return int(rms > threshold)
+
+
+def flutter_judge_B(freqs, psd, snr_db, fmin=1.0, fmax=500.0):
+    """ルートB: 卓越ピークが背景レベルより snr_db [dB] 以上高ければフラッター有。
+
+    背景レベル = 全周波数帯のメジアン（ロバスト推定）。
+    """
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(mask):
+        return 0
+    psd_band   = psd[mask]
+    peak_power = np.max(psd_band)
+    bg_power   = np.median(psd_band)
+    if bg_power <= 0:
+        return 0
+    snr = 10 * np.log10(peak_power / bg_power)
+    return int(snr >= snr_db)
+
+
+def rms_timeseries(x, fs, window_sec, overlap):
+    """時系列を窓分割してRMSを計算する（LCO収束確認用）。
+
+    Returns
+    -------
+    t_centers : 各窓の中心時刻 [秒]
+    rms_vals  : 各窓のRMS値
+    """
+    n_window = int(window_sec * fs)
+    n_step   = int(n_window * (1 - overlap))
+    n_step   = max(n_step, 1)
+
+    centers, rms_vals = [], []
+    i = 0
+    while i + n_window <= len(x):
+        window = x[i:i + n_window]
+        centers.append((i + n_window / 2) / fs)
+        rms_vals.append(np.sqrt(np.mean(window ** 2)))
+        i += n_step
+
+    return np.array(centers), np.array(rms_vals)
+
+
+# ============================================================
+#  オフセット（Pofst / Mofst）の読み込み
+# ============================================================
+def load_ofst_means(ofst_dir):
+    """Pofst・Mofst の各計測点平均値を辞書で返す。
+
+    Returns
+    -------
+    ofst : dict  {short_name: {"Fy": float, "Mz": float}}
+            例: {"260620_Pofst_15.01": {"Fy": -2.31, "Mz": 0.012}, ...}
+    """
+    data_dir = os.path.join(ofst_dir, "data")
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(f"ofst/data フォルダが見つかりません: {data_dir}")
+
+    ofst = {}
+    files = sorted(f for f in os.listdir(data_dir)
+                   if f.endswith(".csv") and not f.endswith("_volt_raw.csv"))
+
+    for fname in files:
+        ref_angle, suffix = angle_from_name(fname)
+        if ref_angle is None:
+            continue
+        # short_name を再構築（後でPdataのファイル名と照合するため）
+        # 例: 260620_Pofst_15.01
+        m = re.search(r"(\d{6})_((?:P|M)ofst)_(\d+\.\d{2})\.csv$", fname)
+        if not m:
+            continue
+        short = f"{m.group(1)}_{m.group(2)}_{m.group(3)}"
+
+        df = load_csv(os.path.join(data_dir, fname))
+        ofst[short] = {
+            "Fy": float(df["Fy"].mean()),
+            "Mz": float(df["Mz"].mean()),
+        }
+
+    print(f"[オフセット] {len(ofst)} 計測点を読み込みました（{ofst_dir}）")
+    return ofst
+
+
+def find_ofst_key(data_fname, ofst, phase):
+    """Pdata/Mdata のファイル名に対応するオフセットキーを探す。
+
+    Pdata → Pofst、Mdata → Mofst の同じ ref_angle / suffix を使う。
+    """
+    ref_angle, suffix = angle_from_name(data_fname)
+    if ref_angle is None:
+        return None
+
+    # yymmdd はファイル名の3トークン目
+    m = re.search(r"_(\d{6})_(?:P|M)data_", data_fname)
+    if not m:
+        return None
+    yymmdd = m.group(1)
+
+    ofst_phase = "Pofst" if phase == "Pdata" else "Mofst"
+    key = f"{yymmdd}_{ofst_phase}_{ref_angle:02d}.{suffix:02d}"
+    return key if key in ofst else None
+
+
+# ============================================================
+#  1計測点の処理
+# ============================================================
+def process_one_point(csv_path, ofst, phase, args, fig_dir):
+    """1つの6軸CSVを処理して結果辞書を返す。
+
+    Returns
+    -------
+    dict with keys:
+        ref_angle, suffix, aoa,
+        rms_Fy_raw, rms_Mz_raw,          # Pofst補正のみ（平均引かず）
+        rms_Fy, rms_Mz,                   # Pofst補正 + 平均引き（フラッター成分）
+        freq_Fy, freq_Mz,                 # 卓越周波数 [Hz]
+        flutter_A_Fy, flutter_A_Mz,       # ルートA判定
+        flutter_B_Fy, flutter_B_Mz,       # ルートB判定
+    """
+    fname     = os.path.basename(csv_path)
+    ref_angle, suffix = angle_from_name(fname)
+    sign      = phase_sign(fname)
+    aoa       = sign * ref_angle   # 実際の迎角（負迎角は負値）
+
+    df = load_csv(csv_path)
+    if len(df) < 100:
+        warnings.warn(f"データ不足: {fname}（{len(df)} 行）")
+        return None
+
+    t  = df["t"].values
+    Fy = df["Fy"].values
+    Mz = df["Mz"].values
+
+    # ---- Pofst / Mofst によるオフセット補正 ----
+    ofst_key = find_ofst_key(fname, ofst, phase)
+    if ofst_key:
+        Fy = Fy - ofst[ofst_key]["Fy"]
+        Mz = Mz - ofst[ofst_key]["Mz"]
+    else:
+        warnings.warn(f"オフセットキーが見つかりません: {fname}")
+
+    # ---- 均一グリッドへリサンプリング ----
+    t_u, Fy_u = resample_uniform(t, Fy)
+    _,   Mz_u = resample_uniform(t, Mz)
+
+    # ---- 平均引き済み（フラッター成分） ----
+    Fy_ac = Fy_u - np.mean(Fy_u)
+    Mz_ac = Mz_u - np.mean(Mz_u)
+
+    # ---- ハイパスフィルタ（DCドリフト除去） ----
+    Fy_hp = highpass(Fy_ac, args.hp_cutoff)
+    Mz_hp = highpass(Mz_ac, args.hp_cutoff)
+
+    # ---- RMS（フラッター成分） ----
+    rms_Fy = float(np.sqrt(np.mean(Fy_hp ** 2)))
+    rms_Mz = float(np.sqrt(np.mean(Mz_hp ** 2)))
+
+    # ---- RMS（Pofst補正のみ・平均引かず） ----
+    Fy_raw_hp = highpass(Fy_u - np.mean(Fy_u[:int(FS_TARGET)]), args.hp_cutoff)
+    Mz_raw_hp = highpass(Mz_u - np.mean(Mz_u[:int(FS_TARGET)]), args.hp_cutoff)
+    rms_Fy_raw = float(np.sqrt(np.mean(Fy_raw_hp ** 2)))
+    rms_Mz_raw = float(np.sqrt(np.mean(Mz_raw_hp ** 2)))
+
+    # ---- PSD（Welch法） ----
+    freqs_Fy, psd_Fy = calc_psd(Fy_hp)
+    freqs_Mz, psd_Mz = calc_psd(Mz_hp)
+
+    freq_Fy = dominant_freq(freqs_Fy, psd_Fy)
+    freq_Mz = dominant_freq(freqs_Mz, psd_Mz)
+
+    # ---- フラッター判定 ----
+    f_A_Fy = flutter_judge_A(rms_Fy, args.threshold_rms)
+    f_A_Mz = flutter_judge_A(rms_Mz, args.threshold_rms)
+    f_B_Fy = flutter_judge_B(freqs_Fy, psd_Fy, args.peak_snr_db)
+    f_B_Mz = flutter_judge_B(freqs_Mz, psd_Mz, args.peak_snr_db)
+
+    # ---- LCO収束確認（RMSの時間推移） ----
+    t_rms_Fy, rms_t_Fy = rms_timeseries(Fy_hp, FS_TARGET, args.rms_window, RMS_OVERLAP)
+    t_rms_Mz, rms_t_Mz = rms_timeseries(Mz_hp, FS_TARGET, args.rms_window, RMS_OVERLAP)
+
+    # ---- グラフ出力 ----
+    short = re.sub(r"^.*?_(\d{6}_(?:P|M)data_\d+\.\d{2})\.csv$", r"\1", fname)
+    _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
+                freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
+                t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa)
+
+    return {
+        "ref_angle":    ref_angle,
+        "suffix":       suffix,
+        "aoa":          aoa,
+        "rms_Fy_raw":   rms_Fy_raw,
+        "rms_Mz_raw":   rms_Mz_raw,
+        "rms_Fy":       rms_Fy,
+        "rms_Mz":       rms_Mz,
+        "freq_Fy":      freq_Fy,
+        "freq_Mz":      freq_Mz,
+        "flutter_A_Fy": f_A_Fy,
+        "flutter_A_Mz": f_A_Mz,
+        "flutter_B_Fy": f_B_Fy,
+        "flutter_B_Mz": f_B_Mz,
+    }
+
+
+# ============================================================
+#  グラフ出力（1計測点）
+# ============================================================
+def _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
+                freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
+                t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa):
+
+    os.makedirs(fig_dir, exist_ok=True)
+
+    fig, axes = plt.subplots(3, 2, figsize=(14, 10))
+    fig.suptitle(f"AoA = {aoa:+d}°   ({short})", fontsize=13)
+
+    # --- 上段: 時系列（オフセット補正済み・平均引き済み） ---
+    axes[0, 0].plot(t_u, Fy_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst補正済み")
+    axes[0, 0].plot(t_u, Fy_hp, lw=0.8, color="red",      alpha=0.9, label="フラッター成分(HP)")
+    axes[0, 0].set_xlabel("時間 [s]"); axes[0, 0].set_ylabel("Fy [N]")
+    axes[0, 0].set_title("Fy 時系列"); axes[0, 0].legend(fontsize=8); axes[0, 0].grid(True)
+
+    axes[0, 1].plot(t_u, Mz_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst補正済み")
+    axes[0, 1].plot(t_u, Mz_hp, lw=0.8, color="red",      alpha=0.9, label="フラッター成分(HP)")
+    axes[0, 1].set_xlabel("時間 [s]"); axes[0, 1].set_ylabel("Mz [Nm]")
+    axes[0, 1].set_title("Mz 時系列"); axes[0, 1].legend(fontsize=8); axes[0, 1].grid(True)
+
+    # --- 中段: PSD ---
+    axes[1, 0].semilogy(freqs_Fy, psd_Fy, color="steelblue", lw=1.0)
+    axes[1, 0].set_xlabel("周波数 [Hz]"); axes[1, 0].set_ylabel("PSD [N²/Hz]")
+    axes[1, 0].set_title("Fy PSD (Welch)"); axes[1, 0].set_xlim(0, 200); axes[1, 0].grid(True)
+
+    axes[1, 1].semilogy(freqs_Mz, psd_Mz, color="steelblue", lw=1.0)
+    axes[1, 1].set_xlabel("周波数 [Hz]"); axes[1, 1].set_ylabel("PSD [Nm²/Hz]")
+    axes[1, 1].set_title("Mz PSD (Welch)"); axes[1, 1].set_xlim(0, 200); axes[1, 1].grid(True)
+
+    # --- 下段: RMS時間推移（LCO収束確認） ---
+    axes[2, 0].plot(t_rms_Fy, rms_t_Fy, marker="o", ms=3, color="tomato", lw=1.2)
+    axes[2, 0].set_xlabel("時間 [s]"); axes[2, 0].set_ylabel("RMS [N]")
+    axes[2, 0].set_title(f"Fy RMS推移（窓幅={RMS_WINDOW_SEC}s）"); axes[2, 0].grid(True)
+
+    axes[2, 1].plot(t_rms_Mz, rms_t_Mz, marker="o", ms=3, color="tomato", lw=1.2)
+    axes[2, 1].set_xlabel("時間 [s]"); axes[2, 1].set_ylabel("RMS [Nm]")
+    axes[2, 1].set_title(f"Mz RMS推移（窓幅={RMS_WINDOW_SEC}s）"); axes[2, 1].grid(True)
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(fig_dir, f"{short}.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ============================================================
+#  Layer 2: 1条件の処理
+# ============================================================
+def process_one_condition(exp_dir, ofst, args):
+    """1つの風速条件フォルダ（_c01 など）を処理してサマリーCSVを出力する。"""
+
+    log = load_log(exp_dir)
+    rep_U   = log.get("rep_windspeed_U",  0.0)
+    rep_mv  = log.get("rep_windspeed_mV", 0.0)
+    ofst_dir_log = log.get("ofst_dir", "")
+
+    print(f"\n[条件] {os.path.basename(exp_dir)}  U ≈ {rep_U:.2f} m/s  ({rep_mv:.1f} mV)")
+
+    data_dir = os.path.join(exp_dir, "data")
+    fig_dir  = os.path.join(exp_dir, "figures")
+    os.makedirs(fig_dir, exist_ok=True)
+
+    files = sorted(
+        f for f in os.listdir(data_dir)
+        if f.endswith(".csv") and not f.endswith("_volt_raw.csv")
+        and ("_Pdata_" in f or "_Mdata_" in f)
+    )
+
+    if not files:
+        print(f"  [警告] Pdata/Mdata の CSV が見つかりません: {data_dir}")
+        return None
+
+    rows = []
+    for fname in tqdm(files, desc=f"  {os.path.basename(exp_dir)}", ncols=70):
+        phase = "Pdata" if "_Pdata_" in fname else "Mdata"
+        result = process_one_point(
+            os.path.join(data_dir, fname), ofst, phase, args, fig_dir
+        )
+        if result is not None:
+            result["rep_windspeed_U"]  = rep_U
+            result["rep_windspeed_mV"] = rep_mv
+            rows.append(result)
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows).sort_values("aoa").reset_index(drop=True)
+    out_path = os.path.join(exp_dir, "flutter_summary.csv")
+    df.to_csv(out_path, index=False, encoding="utf-8-sig")
+    print(f"  → {out_path} を保存しました（{len(df)} 点）")
+    return df
+
+
+# ============================================================
+#  Layer 3: フラッター発生マップ
+# ============================================================
+def plot_flutter_map(summaries, out_dir):
+    """全条件のサマリーからフラッター発生マップを描画する。
+
+    summaries: list of (rep_U, DataFrame)
+    """
+    if not summaries:
+        return
+
+    for axis, col_A, col_B, unit in [
+        ("Fy", "flutter_A_Fy", "flutter_B_Fy", "N"),
+        ("Mz", "flutter_A_Mz", "flutter_B_Mz", "Nm"),
+    ]:
+        for route, col, label in [
+            ("A_threshold", col_A, f"ルートA（RMS閾値）"),
+            ("B_snr",       col_B, f"ルートB（スペクトルSNR）"),
+        ]:
+            fig, ax = plt.subplots(figsize=(10, 7))
+
+            for rep_U, df in summaries:
+                # フラッター判定が None（閾値未設定）の場合はスキップ
+                valid = df[col].notna()
+                if not valid.any():
+                    continue
+
+                aoas      = df.loc[valid, "aoa"].values
+                flutter   = df.loc[valid, col].values.astype(int)
+
+                # フラッター有: ×、なし: ○
+                idx_yes = flutter == 1
+                idx_no  = flutter == 0
+                ax.scatter(aoas[idx_yes], [rep_U] * idx_yes.sum(),
+                           marker="x", s=80, color="red",   zorder=3, label="_")
+                ax.scatter(aoas[idx_no],  [rep_U] * idx_no.sum(),
+                           marker="o", s=50, color="royalblue", zorder=3, label="_")
+
+            # 凡例用ダミー
+            ax.scatter([], [], marker="x", color="red",        label="フラッター発生")
+            ax.scatter([], [], marker="o", color="royalblue",   label="フラッターなし")
+
+            ax.set_xlabel("迎角 [deg]", fontsize=13)
+            ax.set_ylabel("代表風速 U [m/s]", fontsize=13)
+            ax.set_title(f"フラッター発生マップ  {axis} [{unit}]  {label}", fontsize=13)
+            ax.legend(fontsize=11)
+            ax.grid(True, alpha=0.4)
+
+            fname = f"flutter_map_{axis}_{route}.png"
+            fig.savefig(os.path.join(out_dir, fname), dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"[マップ] {fname} を保存しました")
+
+
+def plot_rms_overview(summaries, out_dir):
+    """全条件・全迎角のRMS一覧グラフ（フラッター強度の俯瞰用）。"""
+    if not summaries:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    cmap = plt.get_cmap("viridis")
+    n = len(summaries)
+
+    for k, (rep_U, df) in enumerate(summaries):
+        color = cmap(k / max(n - 1, 1))
+        label = f"U={rep_U:.1f} m/s"
+        axes[0].plot(df["aoa"], df["rms_Fy"], marker="o", ms=4,
+                     lw=1.2, color=color, label=label)
+        axes[1].plot(df["aoa"], df["rms_Mz"], marker="o", ms=4,
+                     lw=1.2, color=color, label=label)
+
+    for ax, ylabel, title in [
+        (axes[0], "RMS [N]",  "Fy フラッター振幅 RMS"),
+        (axes[1], "RMS [Nm]", "Mz フラッター振幅 RMS"),
+    ]:
+        ax.set_xlabel("迎角 [deg]", fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=12)
+        ax.legend(fontsize=9, ncol=2)
+        ax.grid(True, alpha=0.4)
+
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, "rms_overview.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[概観] {out_path} を保存しました")
+
+
+# ============================================================
+#  メイン
+# ============================================================
+def main():
+    args = parse_args()
+
+    # ---- 単一条件モード（--exp_dir） ----
+    if args.exp_dir:
+        exp_dir = args.exp_dir.rstrip("/\\")
+        log     = load_log(exp_dir)
+        ofst_dir = log.get("ofst_dir", "")
+        if not ofst_dir or not os.path.isdir(ofst_dir):
+            print(f"[エラー] ofst_dir が見つかりません: {ofst_dir}", file=sys.stderr)
+            sys.exit(1)
+        ofst = load_ofst_means(ofst_dir)
+        process_one_condition(exp_dir, ofst, args)
+        return
+
+    # ---- 一括処理モード（--base_dir） ----
+    base_dir = args.base_dir.rstrip("/\\")
+    base_name = os.path.basename(base_dir)   # 例: 260620_flexible
+
+    # ofst フォルダを探す
+    ofst_dir = os.path.join(
+        os.path.dirname(base_dir),
+        f"{base_name}_ofst"
+    )
+    if not os.path.isdir(ofst_dir):
+        # base_dir の中にあるケースにも対応
+        ofst_dir = os.path.join(base_dir, f"{base_name}_ofst")
+    if not os.path.isdir(ofst_dir):
+        print(f"[エラー] ofst フォルダが見つかりません。\n"
+              f"  探した場所: {ofst_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    ofst = load_ofst_means(ofst_dir)
+
+    # cXX フォルダを番号順に列挙
+    parent = os.path.dirname(base_dir) if os.path.dirname(base_dir) else "."
+    cond_dirs = sorted(
+        os.path.join(parent, d)
+        for d in os.listdir(parent)
+        if re.match(rf"^{re.escape(base_name)}_c\d+$", d)
+        and os.path.isdir(os.path.join(parent, d))
+    )
+
+    if not cond_dirs:
+        print(f"[エラー] 条件フォルダ（_c01 など）が見つかりません。", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[一括処理] {len(cond_dirs)} 条件を処理します。")
+
+    summaries = []
+    for cond_dir in cond_dirs:
+        log = load_log(cond_dir)
+        rep_U = log.get("rep_windspeed_U", 0.0)
+        df = process_one_condition(cond_dir, ofst, args)
+        if df is not None:
+            summaries.append((rep_U, df))
+
+    # Layer 3: マップ出力（base_dir と同じ階層に保存）
+    map_dir = os.path.join(parent, f"{base_name}_results")
+    os.makedirs(map_dir, exist_ok=True)
+    plot_flutter_map(summaries, map_dir)
+    plot_rms_overview(summaries, map_dir)
+
+    print(f"\n[完了] 結果を保存しました: {map_dir}")
+
+
+if __name__ == "__main__":
+    main()
