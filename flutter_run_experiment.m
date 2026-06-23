@@ -11,13 +11,12 @@
 % 実行方法:
 %   MATLAB コマンドウィンドウで:  flutter_run_experiment
 %
-% 実験フロー:
-%   1. Pofst/Mofst を1回計測（KB打ち切り・無風オフセット共有用）
-%   2. 風速条件ループ:
-%      ブロワー調整 → 代表風速自動計測 → フォルダ名決定(c01,c02,...)
-%      → Pdata/Mdata を秒数指定で計測
-%      → 「次の条件を追加しますか？」
-%   3. 後処理（flutter_run_postprocess）へ
+% フォルダ構成:
+%   output_dir/
+%   └── 260620_flexible/              ← base_exp_dir（ベースフォルダ）
+%       ├── 260620_flexible_ofst/     ← Pofst/Mofst
+%       ├── 260620_flexible_c01/      ← 風速条件①
+%       └── 260620_flexible_c02/      ← 風速条件②
 
 addpath(fullfile(fileparts(mfilename('fullpath')), 'measurement_control'));
 
@@ -58,7 +57,8 @@ logger = LeptrinoLogger(cfg.python_exe, script_path, ...
 fprintf('[接続] R6441B デジボル (%s) に接続中...\n', cfg.r6441b_port);
 s_volt = connect_r6441b_(cfg.r6441b_port, cfg.r6441b_timeout_sec);
 
-monitor = WindyMonitor(cfg.force_sensor_size_limit_kb);
+% FlutterWindyMonitor を使用（秒数表示・ケース名表示に対応）
+monitor = FlutterWindyMonitor(cfg.force_sensor_size_limit_kb);
 monitor.setDataSource(@() logger.getRecentRows(600));
 
 % 解放ガード
@@ -85,8 +85,13 @@ fprintf('  無風オフセット計測（Pofst / Mofst）\n');
 fprintf('  ※ この結果を全風速条件で共有します\n');
 fprintf('========================================\n\n');
 
-ofst_name = sprintf('%s_ofst', base_name);
-ofst_dir  = fullfile(cfg.output_dir, ofst_name);
+% [バグ修正] ベースフォルダ（output_dir/260620_flexible/）を先に作成し、
+% ofst・c0N はその中に作る
+base_exp_dir  = fullfile(cfg.output_dir, base_name);
+[~, ~] = mkdir(base_exp_dir);
+
+ofst_name     = sprintf('%s_ofst', base_name);
+ofst_dir      = fullfile(base_exp_dir, ofst_name);
 ofst_data_dir = fullfile(ofst_dir, 'data');
 [~, ~] = mkdir(ofst_data_dir);
 
@@ -98,6 +103,11 @@ met.calib_a        = cfg.calib_a;
 met.calib_b        = cfg.calib_b;
 save_experiment_log_(ofst_log_path, date_str, met);
 
+% [バグ修正] Pofst でのみブロワー停止確認を行う。Mofst は連続実行。
+input('ブロワーが停止していることを確認したら Enter を押してください: ', 's');
+fprintf('\n');
+
+monitor.setConditionLabel('ofst');
 monitor.setPhase('Pofst');
 run_ofst_phase_('Pofst', ofst_data_dir, ofst_dir, date_str, ...
     max_angle, angle_step, stage, logger, s_volt, monitor, cfg);
@@ -130,9 +140,9 @@ while true
     % ---- 代表風速の自動計測 ----
     [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met);
 
-    % ---- 実験フォルダ名の決定 ----
-    cond_name = sprintf('%s_%s', base_name, cond_label);
-    cond_dir  = fullfile(cfg.output_dir, cond_name);
+    % ---- 実験フォルダ名の決定（ベースフォルダの中に作成）----
+    cond_name     = sprintf('%s_%s', base_name, cond_label);
+    cond_dir      = fullfile(base_exp_dir, cond_name);   % [バグ修正] base_exp_dir の中へ
     cond_data_dir = fullfile(cond_dir, 'data');
     [~, ~] = mkdir(cond_data_dir);
 
@@ -143,11 +153,13 @@ while true
     met_cond = met;
     met_cond.rep_windspeed_mV  = rep_mv;
     met_cond.rep_windspeed_U   = rep_U;
-    met_cond.ofst_dir          = ofst_dir;   % 後処理でオフセットを参照するパス
+    met_cond.ofst_dir          = ofst_dir;
     cond_log_path = fullfile(cond_dir, sprintf('%s_experiment_log.json', date_str));
     save_flutter_log_(cond_log_path, date_str, met_cond);
 
     % ---- Pdata ----
+    monitor.setConditionLabel(cond_label);
+    monitor.setTimeLimitSec(measure_sec);
     monitor.setPhase('Pdata');
     run_data_phase_('Pdata', cond_data_dir, cond_dir, date_str, ...
         max_angle, angle_step, measure_sec, stage, logger, s_volt, monitor, cfg);
@@ -173,8 +185,7 @@ end
 %  5. 終了
 % =====================================================================
 fprintf('\n=== 全条件完了 ===\n');
-fprintf('[オフセットフォルダ] %s\n', ofst_dir);
-fprintf('[データフォルダ群]   %s\n\n', cfg.output_dir);
+fprintf('[ベースフォルダ] %s\n\n', base_exp_dir);
 notify_sound_(4);
 
 try; stage.moveToAngle(0); catch; end
@@ -188,10 +199,9 @@ cleanup_devices_(stage, logger, s_volt, monitor);
 function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
         max_angle, angle_step, stage, logger, s_volt, monitor, cfg)
     % Pofst / Mofst フェーズ: KB打ち切り・単調スイープ
+    % ブロワー停止確認は呼び出し元（Pofst の前）で1回だけ行うため、ここでは行わない
 
     fprintf('\n--- %s フェーズ開始 ---\n', phase);
-    input(sprintf('ブロワーが停止していることを確認したら Enter を押してください: '), 's');
-    fprintf('\n');
 
     % オフセット計測前の電圧オフセット自動取得（Pofst のみ）
     if strcmp(phase, 'Pofst')
@@ -230,7 +240,6 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
         monitor.resetGraph();
         fprintf('[計測開始] 6軸センサ & デジボル 同時計測中（KB打ち切り）...\n');
 
-        % KB打ち切りでstart（timeLimitSec なし = 既存動作）
         logger.start(force_path);
         pause(0.5);
 
@@ -258,6 +267,7 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
                     sz_kb = logger.getSizeKB();
                     fprintf('  6軸: %6.1f KB / %.0f KB  |  デジボル: %3d サンプル (%.2f mV)\r', ...
                         sz_kb, cfg.force_sensor_size_limit_kb, nv, v_mv);
+                    % Pofst/Mofst はKBベースなのでsize_kb/limit_kbをそのまま使う
                     prog = struct('idx', idx, 'total', n_total, ...
                                   'size_kb', sz_kb, 'limit_kb', cfg.force_sensor_size_limit_kb);
                     monitor.update(pt.target_angle, v_mv, prog);
@@ -317,7 +327,6 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
         monitor.resetGraph();
         fprintf('[計測開始] 6軸センサ & デジボル 同時計測中（%.1f 秒）...\n', measure_sec);
 
-        % 秒数打ち切りでstart
         logger.start(force_path, measure_sec);
         pause(0.5);
 
@@ -328,7 +337,7 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
 
         flush(s_volt, 'input');
         s_volt.Timeout = 0.8;
-        voltages = zeros(1, 2000);   % 30秒×10サンプル/秒 = 300サンプル想定。余裕を持って確保
+        voltages = zeros(1, 2000);
         nv = 0;
 
         while ~logger.isDone()
@@ -345,10 +354,9 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
                     elapsed = logger.getElapsedSec();
                     fprintf('  経過: %5.1f / %.1f 秒  |  デジボル: %3d サンプル (%.2f mV)\r', ...
                         elapsed, measure_sec, nv, v_mv);
-                    % WindyMonitor のプログレスバーを経過時間ベースで更新
+                    % 秒数ベースのプログレス（0〜1 を limit_kb スケールに変換して渡す）
                     prog = struct('idx', idx, 'total', n_total, ...
-                                  'size_kb', elapsed / measure_sec * cfg.force_sensor_size_limit_kb, ...
-                                  'limit_kb', cfg.force_sensor_size_limit_kb);
+                                  'elapsed_sec', elapsed, 'limit_sec', measure_sec);
                     monitor.update(pt.target_angle, v_mv, prog);
                 end
                 pause(0.1);
@@ -377,7 +385,7 @@ end
 
 
 % =====================================================================
-%  ローカル関数
+%  ローカル関数（以下は変更なし）
 % =====================================================================
 
 function cfg = load_flutter_config_(base_dir)
@@ -399,7 +407,6 @@ function cfg = load_flutter_config_(base_dir)
         error('config.json に必須キーが設定されていません: %s', strjoin(missing, ', '));
     end
 
-    % デフォルト値の補完
     if ~isfield(cfg, 'force_sensor_size_limit_kb') || isempty(cfg.force_sensor_size_limit_kb)
         cfg.force_sensor_size_limit_kb = 1000;
     end
@@ -433,9 +440,10 @@ function name = input_base_name_(output_dir)
     fprintf('=== 実験ベース名の入力 ===\n');
     fprintf('  例: 260620_flexible\n');
     fprintf('  フォルダは自動で以下のように作成されます:\n');
-    fprintf('    260620_flexible_ofst   （無風オフセット）\n');
-    fprintf('    260620_flexible_c01    （風速条件①）\n');
-    fprintf('    260620_flexible_c02    （風速条件②）\n\n');
+    fprintf('    output_dir/260620_flexible/\n');
+    fprintf('      ├── 260620_flexible_ofst/\n');
+    fprintf('      ├── 260620_flexible_c01/\n');
+    fprintf('      └── 260620_flexible_c02/\n\n');
     forbidden = '/\:*?"<>|';
     while true
         name = strtrim(input('実験ベース名: ', 's'));
@@ -443,8 +451,7 @@ function name = input_base_name_(output_dir)
             fprintf('  ※ 有効な名前を入力してください（特殊文字 %s 不可）\n', forbidden);
             continue;
         end
-        % ofst フォルダが既に存在する場合は確認
-        ofst_check = fullfile(output_dir, sprintf('%s_ofst', name), 'data');
+        ofst_check = fullfile(output_dir, name, sprintf('%s_ofst', name), 'data');
         if isfolder(ofst_check)
             fprintf('  ※ [%s_ofst] は既に存在します。上書きしますか？ [y/n]: ', name);
             ans_ow = strtrim(input('', 's'));
@@ -490,24 +497,13 @@ function [max_angle, angle_step, measure_sec] = configure_flutter_sweep_(cfg)
 end
 
 function pts = build_flutter_sequence_(phase, max_angle, angle_step)
-    % 単調増加スイープ（0°経由なし）
-    %
-    % Pフェーズ: 0° → step° → 2*step° → ... → max_angle°
-    % Mフェーズ: 0° → -step° → -2*step° → ... → -max_angle°
-    %
-    % 返値フィールド:
-    %   target_angle : 移動先の角度
-    %   ref_angle    : ファイル名に使う参照迎角（正の整数）
-    %   suffix       : 1（定常空力実験との互換用。フラッター実験では全点 suffix=1）
-    %                  ただし 0° は suffix=0 とする
-
     if startsWith(phase, 'P')
         angle_sign = +1;
     else
         angle_sign = -1;
     end
 
-    angles = [0, angle_step:angle_step:max_angle];   % 0°を先頭に含める
+    angles = [0, angle_step:angle_step:max_angle];
     n_pts  = numel(angles);
     pts(n_pts) = struct('target_angle', 0, 'ref_angle', 0, 'suffix', 0);
 
@@ -522,13 +518,6 @@ function pts = build_flutter_sequence_(phase, max_angle, angle_step)
 end
 
 function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
-    % 数秒間デジボルを計測して代表風速を求める
-    %
-    % 風速換算に使う物理量:
-    %   rho        : met.rho_kg_m3（気温・気圧から input_met_conditions_ で計算済み）
-    %   water_dens : met.water_density（Kell の式で計算済み）
-    %   offset_mV  : cfg.volt_offset_mV（Pofst 計測後に更新済みの値）
-    %   calib_a/b  : cfg.calib_a / cfg.calib_b（差圧センサ校正定数）
     MEAS_SEC = 5;
     fprintf('[代表風速計測] %.0f 秒間計測中...\n', MEAS_SEC);
 
@@ -563,12 +552,11 @@ function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
 
     rep_mv = mean(samples(1:n));
 
-    % 風速に換算（make_windspeed.py と同じ式）
-    offset_mV  = cfg.volt_offset_mV;   % Pofst 計測後に更新済み
+    offset_mV  = cfg.volt_offset_mV;
     a          = cfg.calib_a;
     b          = cfg.calib_b;
-    rho        = met.rho_kg_m3;        % 気温・気圧から計算済みの空気密度
-    water_dens = met.water_density;    % Kell の式による水密度
+    rho        = met.rho_kg_m3;
+    water_dens = met.water_density;
 
     h = (rep_mv - offset_mV) * a + b;
     if h > 0 && rho > 0
@@ -627,7 +615,6 @@ function save_experiment_log_(filepath, date_str, met)
 end
 
 function save_flutter_log_(filepath, date_str, met)
-    % 風速条件フォルダ用ログ（save_experiment_log_ に代表風速・ofst_dir を追加）
     log = struct('date', date_str, ...
         'temperature_C',     met.temperature_C,    ...
         'pressure_mmHg',     met.pressure_mmHg,    ...
