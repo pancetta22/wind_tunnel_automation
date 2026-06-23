@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 # このスクリプトと同じ diagnostics/ にある lumix_capture を読み込む。
@@ -149,13 +150,14 @@ def main() -> int:
     ap.add_argument("--count", type=int, default=2,
                     help="撮影テストの枚数（既定2）")
     ap.add_argument("--out", default=None,
-                    help="撮影テストの保存先フォルダ（既定: diagnostics/lumix_test_out）")
+                    help="撮影テストの保存先（既定: OS一時フォルダ。リポジトリは汚さない）")
     ap.add_argument("--skip-capture", action="store_true",
                     help="撮影せず接続/DLNAのみ確認する")
     args = ap.parse_args()
 
-    out_dir = args.out or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "lumix_test_out")
+    # 既定の保存先はリポジトリ外（OSの一時フォルダ）。テスト実行でリポジトリに
+    # フォルダを作らないようにするため。--out で明示指定も可能。
+    out_dir = args.out or os.path.join(tempfile.gettempdir(), "windy_lumix_test")
 
     print("=" * 60)
     print("  Lumix DC-G100D カメラ総合テスト")

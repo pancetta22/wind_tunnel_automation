@@ -12,10 +12,13 @@ pressure_data.csv
 # Antigravity CLI
 .antigravitycli/
 
-# Python Virtual Environment
+# Python
 .venv/
 venv/
 ENV/
+__pycache__/
+*.pyc
+*.pyo
 
 # Camera test output (lumix_test.py の撮影テスト保存先・リポジトリには入れない)
 diagnostics/lumix_test_out/
