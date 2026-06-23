@@ -352,7 +352,8 @@ while ph_idx <= n_phases
             %  なく最初の点(idx==1)でのみ撮る。撮影失敗は計測を止めない。
             if take_photos && is_wind_phase_(phase) && (pt.suffix == 1 || idx == 1)
                 label = angle_label_(pt.target_angle);
-                capture_photos_(cfg.python_exe, photo_script, photo_dir, label, 3);
+                capture_photos_(cfg.python_exe, photo_script, photo_dir, label, 3, ...
+                                pt.target_angle, phase);
             end
 
             idx = idx + 1;   % 正常完了 → 次の計測点へ
@@ -1041,8 +1042,14 @@ function [take_photos, photo_dir] = setup_photos_(picture_dir)
     if take_photos
         photo_dir = fullfile(picture_dir, 'photo');
         [~, ~] = mkdir(photo_dir);
-        fprintf('→ 撮影します。各迎角で3枚ずつ photo/ に保存します。\n');
-        fprintf('[準備] 写真フォルダ : %s\n\n', photo_dir);
+        % 撮影中はシャッターのみ（DLNAライブ転送は使わない）。各ショットを
+        % _shot_manifest.csv に記録し、実験後にSDから photo_import.py で取り込む。
+        manifest = fullfile(photo_dir, '_shot_manifest.csv');
+        if isfile(manifest), delete(manifest); end   % 古い記録は消して撮り直す
+        fprintf('→ 撮影します。各迎角で3枚ずつシャッターを切り、SDカードに保存します。\n');
+        fprintf('  （実験後にSDからPCへ取り込み: post_process/photo_import.py）\n');
+        fprintf('[準備] 写真フォルダ : %s\n', photo_dir);
+        fprintf('[準備] 撮影記録     : %s\n\n', manifest);
     else
         fprintf('→ 撮影しません。\n\n');
     end
@@ -1092,17 +1099,20 @@ function ok = confirm_photo_connection_(python_exe, photo_script)
     end
 end
 
-function capture_photos_(python_exe, photo_script, photo_dir, label, count)
-    % 指定迎角で count 枚撮影し、photo_dir に <label>1.JPG.. として保存する。
-    %  撮影/保存の失敗は計測を止めない（警告のみ）。力データが主、写真は補助。
-    cmd = sprintf('"%s" "%s" --out "%s" --name "%s" --count %d', ...
-        python_exe, photo_script, photo_dir, label, count);
+function capture_photos_(python_exe, photo_script, photo_dir, label, count, angle, phase)
+    % 指定迎角で count 枚シャッターを切り、SDカードに保存する（DLNA転送はしない）。
+    %  各ショットは photo_dir/_shot_manifest.csv に撮影順・成功可否で記録する。
+    %  接続・シャッターはリトライ付き。撮影失敗は計測を止めない（記録して継続）。
+    manifest = fullfile(photo_dir, '_shot_manifest.csv');
+    cmd = sprintf(['"%s" "%s" --shutter-only --name "%s" --count %d ' ...
+                   '--manifest "%s" --angle %d --phase "%s"'], ...
+        python_exe, photo_script, label, count, manifest, angle, phase);
     [st, out] = system(cmd);
     if ~isempty(strtrim(out)), fprintf('%s\n', out); end
     if st == 0
-        fprintf('[撮影] %s を %d 枚保存しました。\n\n', label, count);
+        fprintf('[撮影] %s を %d 枚 SDに保存しました（後でPCへ取り込み）。\n\n', label, count);
     else
-        fprintf('[撮影][警告] %s の撮影/保存に失敗しました（実験は続行します）。\n\n', label);
+        fprintf('[撮影][警告] %s の撮影で失敗がありました（記録済み・実験は続行）。\n\n', label);
     end
 end
 

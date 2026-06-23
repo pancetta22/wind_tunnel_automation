@@ -23,6 +23,7 @@
 | ファイル | 説明 |
 |---------|------|
 | `force_measurement.py` | **力の後処理 入口**。windspeed → calc_force を順に実行 |
+| `photo_import.py` | SDカードの実験写真を撮影manifestに従い `0deg1.JPG` 等へ取り込み |
 | `picture_analysis.py` | **写真の後処理 入口**。翼模型写真 → 翼型輪郭（3枚平均） |
 | `make_comparison.py` | 過去剛体翼との比較パワポを生成（WindyData を走査＋同梱過去分） |
 | `make_windspeed.py` | 差圧電圧サマリー → `windspeed.csv`（force_measurement が呼ぶ） |
@@ -119,6 +120,31 @@ k [Pa/mV] = U² × ρ / (2 × V)
 | `Cl.png` / `Cd.png` / `Cm.png` | 空力係数グラフ（表示範囲 ±30°）|
 | `polar.png` | Cl–Cd 極曲線 |
 | `Cl_PM.png` / `Cd_PM.png` / `Cm_PM.png` | 正・負迎角比較グラフ（両側計測時のみ）|
+
+---
+
+## 写真の取り込み（`photo_import.py`・SDカード方式）
+
+LUMIX DC-G100D はリモート操作（cam.cgi）中はDLNAで画像を配信しないため、
+実験中の**ライブ転送はできない**。そこで撮影は次の2段構えで行う：
+
+1. **実験中**：`run_experiment` がシャッターだけ切り、SDカードに保存する。
+   各ショットの撮影順・迎角ラベル・成否を `picture/photo/_shot_manifest.csv` に記録。
+2. **実験後**：SDカードの写真をPCの任意フォルダにコピーし、`photo_import.py` で
+   撮影順に `0deg1.JPG`・`p5deg1.JPG`… へリネーム取り込みする。
+
+```bat
+:: まず割り当てを確認（--dry-run）→ よければ外して実行
+post_process\venv\Scripts\python <repo>\post_process\photo_import.py ^
+    --sd "<SDからコピーした写真フォルダ>" ^
+    --manifest "<実験フォルダ>\picture\photo\_shot_manifest.csv" ^
+    --out "<実験フォルダ>\picture\photo" --dry-run
+```
+
+対応づけは「manifest の成功ショットを撮影順に」「SDのJPEGをファイル名順（=撮影順）に」
+並べ、**最新 N 枚**を実験写真として先頭から割り当てる（SDに過去写真が残っていてもよい）。
+取り込み後は下記の `picture_analysis.py` に進める。`run_postprocess` は写真が未取り込み
+（manifestだけ存在）の場合に上記コマンドを案内する。
 
 ---
 

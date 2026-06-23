@@ -217,7 +217,18 @@ function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
         return   % 写真を撮っていない実験 → 何もしない
     end
     imgs = [dir(fullfile(photo_dir, '*.JPG')); dir(fullfile(photo_dir, '*.jpg'))];
+    manifest = fullfile(photo_dir, '_shot_manifest.csv');
     if isempty(imgs)
+        if isfile(manifest)
+            % 撮影記録だけある＝SDからの取り込み未実施。手順を案内する。
+            import_script = fullfile(fileparts(pic_script), 'photo_import.py');
+            fprintf('[写真] SDカードからの取り込みがまだです（撮影記録のみ存在）。\n');
+            fprintf('  1) カメラのSDカードの写真をPCの任意フォルダにコピー\n');
+            fprintf('  2) 次を実行して撮影順に迎角ラベル名へ取り込み（まず --dry-run で確認推奨）:\n');
+            fprintf('     "%s" "%s" --sd "<SD写真フォルダ>" --manifest "%s" --out "%s"\n', ...
+                venv_python, import_script, manifest, photo_dir);
+            fprintf('  3) その後 run_postprocess を再実行すると輪郭抽出に進めます。\n\n');
+        end
         return
     end
     if ~isfile(pic_script)

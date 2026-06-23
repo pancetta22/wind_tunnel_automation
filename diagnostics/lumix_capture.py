@@ -30,6 +30,7 @@
 from __future__ import annotations   # 型注釈を遅延評価にして古い Python でも動くように
 
 import argparse
+import csv
 import os
 import socket
 import sys
@@ -37,6 +38,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from html import unescape
 from urllib.parse import urljoin, urlparse
 
@@ -204,6 +206,9 @@ def connect() -> bool:
         if acc == "ok":
             break
         elif acc in ("ok_under_research", "ok_under_research_no_msg"):
+            time.sleep(ACC_POLL_INTERVAL)
+        elif acc is None:
+            # 一時的な無応答（Wi-Fi不安定・瞬断）。即失敗せず制限時間内は再試行する。
             time.sleep(ACC_POLL_INTERVAL)
         else:
             print(f"エラー: accctrl 失敗 ({body.strip()!r})", file=sys.stderr)
@@ -610,6 +615,67 @@ def capture_series(out_dir: str, base_name: str, count: int) -> bool:
 
 
 # ============================================================
+#  シャッターのみ（SDカード保存 + 撮影manifest記録）
+#  ── DLNAライブ転送が使えないカメラ向け。撮影だけ行い、画像は実験後に
+#     SDカードからまとめてPCへ取り込む（post_process/photo_import.py）。
+# ============================================================
+def _append_manifest(manifest_path: str, label: str, shot: int,
+                     target_angle, phase, pc_time: str, shutter_ok: bool) -> None:
+    """撮影記録CSVに1行追記する。ファイルが無ければヘッダを書く。
+    seq（実験全体での撮影順）は既存の行数から決める。"""
+    have = os.path.isfile(manifest_path) and os.path.getsize(manifest_path) > 0
+    seq = 1
+    if have:
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                seq = sum(1 for _ in f)   # ヘッダ込み行数 = 次のseq
+        except OSError:
+            seq = 1
+    try:
+        with open(manifest_path, "a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if not have:
+                w.writerow(["seq", "label", "shot", "target_angle",
+                            "phase", "pc_time", "shutter_ok"])
+                seq = 1
+            w.writerow([seq, label, shot,
+                        "" if target_angle is None else target_angle,
+                        phase or "", pc_time, 1 if shutter_ok else 0])
+    except OSError as e:
+        print(f"警告: 撮影記録に書けません {manifest_path}: {e}", file=sys.stderr)
+
+
+def capture_series_shutter_only(label: str, count: int, manifest_path: str,
+                                target_angle=None, phase=None, retries: int = 3) -> bool:
+    """count 枚シャッターを切り（SDカードに保存）、各ショットを manifest に記録する。
+    DLNAダウンロードはしない。各ショットは失敗時にリトライ。1枚でも成功で True。
+    撮影失敗があっても記録だけ残して継続する（実験を止めない）。"""
+    print(f"撮影中... {label} を {count} 枚（SDに保存→後でPCへ取り込み）")
+    n_ok = 0
+    for i in range(1, count + 1):
+        ok = False
+        for attempt in range(retries):
+            if capture():
+                ok = True
+                break
+            if attempt < retries - 1:
+                print(f"  [{label} {i}/{count}] シャッター再試行 "
+                      f"{attempt + 1}/{retries - 1}", file=sys.stderr)
+                time.sleep(0.8)
+        pc_time = datetime.now().isoformat(timespec="microseconds")
+        _append_manifest(manifest_path, label, i, target_angle, phase, pc_time, ok)
+        if ok:
+            n_ok += 1
+            print(f"  [{label} {i}/{count}] OK")
+        else:
+            print(f"  [{label} {i}/{count}] 失敗（記録して継続）", file=sys.stderr)
+        if i < count:
+            time.sleep(SHOT_INTERVAL_SEC)
+    print(f"撮影: {n_ok}/{count} 枚成功（{label}）")
+    return n_ok > 0
+
+
+# ============================================================
 #  DLNA 構成診断（--diag）
 # ============================================================
 def dlna_diag(skip_mode: bool = False) -> int:
@@ -746,6 +812,12 @@ def main() -> int:
     parser.add_argument("--dlna-only", action="store_true",
                         help="cam.cgi接続せずDLNAのSSDP+Browseだけ試す"
                              "（カメラを「カメラ内の画像を送る」モードにして使う）")
+    parser.add_argument("--shutter-only", action="store_true",
+                        help="DLNA転送せずシャッターのみ。SDに保存しmanifestに記録（実験用・推奨）")
+    parser.add_argument("--manifest", default=None,
+                        help="--shutter-only の撮影記録CSVのパス")
+    parser.add_argument("--angle", default=None, help="記録用の目標迎角[度]")
+    parser.add_argument("--phase", default=None, help="記録用のフェーズ名")
     args = parser.parse_args()
 
     # --dlna-only: cam.cgi接続(accctrl/recmode)を行わず、DLNAだけ確認する。
@@ -757,6 +829,16 @@ def main() -> int:
     if not connect():
         return 1
     print("接続OK")
+
+    # --shutter-only: シャッターのみ（SD保存＋manifest記録、DLNA転送なし）
+    if args.shutter_only:
+        if not args.name or not args.manifest:
+            print("エラー: --shutter-only は --name と --manifest が必要です",
+                  file=sys.stderr)
+            return 2
+        ok = capture_series_shutter_only(args.name, max(1, args.count),
+                                         args.manifest, args.angle, args.phase)
+        return 0 if ok else 1
 
     # --diag: DLNA構成の診断（撮影はしない）
     if args.diag:

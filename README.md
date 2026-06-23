@@ -121,6 +121,7 @@ Windy/
 │   └── CfsUsb.dll              #   Leptrino USB ドライバ DLL（32bit）
 ├── post_process/               # 後処理を全て一元化（venvもここ）
 │   ├── force_measurement.py    #   力の後処理 入口（windspeed→空力係数）
+│   ├── photo_import.py         #   SD写真を撮影記録に従い取り込み（DLNA不可機種向け）
 │   ├── picture_analysis.py     #   写真の後処理 入口（翼型輪郭抽出）
 │   ├── make_comparison.py      #   過去剛体翼との比較パワポ生成
 │   ├── make_windspeed.py / calc_force.py  #   力後処理のワーカ
