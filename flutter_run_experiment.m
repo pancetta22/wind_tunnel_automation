@@ -180,6 +180,9 @@ while true
     fprintf('[保存先] %s\n\n', cond_dir);
     notify_sound_(2);
 
+    % ---- 任意の迎角へ移動して目視確認（計測なし）----
+    manual_angle_check_(stage, max_angle, cfg);
+
     % ---- 次の条件を追加するか ----
     ans_next = strtrim(input('次の風速条件を追加しますか？ [y/n]: ', 's'));
     if ~any(strcmpi(ans_next, {'y', 'yes'}))
@@ -772,6 +775,33 @@ function notify_sound_(n_tones)
     catch
         try; beep; catch; end
     end
+end
+
+function manual_angle_check_(stage, max_angle, cfg)
+    % 目視確認用に任意の迎角へステージを移動する（計測・保存は一切しない）。
+    % n になるまで繰り返し、複数姿勢を続けて確認できる。
+    ans_do = strtrim(input('迎角を指定して実行しますか？ [y/n]: ', 's'));
+    if ~any(strcmpi(ans_do, {'y', 'yes'}))
+        return;
+    end
+
+    fprintf('\n--- 任意迎角への移動（目視確認・計測なし）---\n');
+    while true
+        angle = ask_int_(sprintf('移動先の迎角 [度, -%d〜%d]: ', max_angle, max_angle), ...
+                         -max_angle, max_angle);
+        fprintf('[移動] 迎角 %+d° へ移動中...\n', angle);
+        stage.moveToAngle(angle);
+        fprintf('[移動] 迎角 %+d° に到達\n', angle);
+
+        fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+        pause(cfg.angle_settle_sec);
+
+        ans_more = strtrim(input('別の迎角も確認しますか？ [y/n]: ', 's'));
+        if ~any(strcmpi(ans_more, {'y', 'yes'}))
+            break;
+        end
+    end
+    fprintf('--- 任意迎角への移動 完了 ---\n\n');
 end
 
 function v = ask_int_(prompt, lo, hi)
