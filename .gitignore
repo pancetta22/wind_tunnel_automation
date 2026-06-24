@@ -9,7 +9,7 @@ slprj/
 config.json
 pressure_data.csv
 
-# Antigravity CLI
+CLAUDE.md
 .antigravitycli/
 
 # Python Virtual Environment
