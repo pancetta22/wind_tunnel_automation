@@ -101,6 +101,10 @@ def parse_args():
                    help=f"ハイパスフィルタのカットオフ周波数 [Hz]（デフォルト: {HP_CUTOFF_HZ}）")
     p.add_argument("--rms_window",    type=float, default=RMS_WINDOW_SEC,
                    help=f"LCO収束確認用の窓幅 [秒]（デフォルト: {RMS_WINDOW_SEC}）")
+    p.add_argument("--map_fmax",      type=float, default=50.0,
+                   help="迎角×周波数マップの周波数表示上限 [Hz]（デフォルト: 50）")
+    p.add_argument("--map_dyn_range", type=float, default=60.0,
+                   help="迎角×周波数マップのカラー dB ダイナミックレンジ（デフォルト: 60）")
     return p.parse_args()
 
 
@@ -389,6 +393,10 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
         "flutter_A_Mz": f_A_Mz,
         "flutter_B_Fy": f_B_Fy,
         "flutter_B_Mz": f_B_Mz,
+        # 迎角×周波数マップ構築用（CSV へは書き出さない一時キー）
+        "_psd_freqs":   freqs_Fy,   # freqs_Fy と freqs_Mz は同一グリッド
+        "_psd_Fy":      psd_Fy,
+        "_psd_Mz":      psd_Mz,
     }
 
 
@@ -466,12 +474,20 @@ def process_one_condition(exp_dir, ofst, args):
         return None
 
     rows = []
+    spec_rows = []   # 迎角×周波数マップ用のスペクトル配列
     for fname in tqdm(files, desc=f"  {os.path.basename(exp_dir)}", ncols=70):
         phase = "Pdata" if "_Pdata_" in fname else "Mdata"
         result = process_one_point(
             os.path.join(data_dir, fname), ofst, phase, args, fig_dir
         )
         if result is not None:
+            # スペクトル配列は DataFrame に混ぜず別リストへ退避
+            spec_rows.append({
+                "aoa":     result["aoa"],
+                "freqs":   result.pop("_psd_freqs"),
+                "psd_Fy":  result.pop("_psd_Fy"),
+                "psd_Mz":  result.pop("_psd_Mz"),
+            })
             result["rep_windspeed_U"]  = rep_U
             result["rep_windspeed_mV"] = rep_mv
             rows.append(result)
@@ -483,7 +499,83 @@ def process_one_condition(exp_dir, ofst, args):
     out_path = os.path.join(exp_dir, "flutter_summary.csv")
     df.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"  → {out_path} を保存しました（{len(df)} 点）")
+
+    # 迎角×周波数マップ（fig10風スペクトログラム）
+    if spec_rows:
+        plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args)
+
     return df
+
+
+# ============================================================
+#  Layer 1.5: 迎角×周波数マップ（fig10風スペクトログラム）
+# ============================================================
+def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
+    """1風速条件について、横軸=迎角・縦軸=周波数・濃淡=PSD[dB] のマップを描く。
+
+    Trickey et al. (2002) の fig10（流速×周波数スペクトログラム）の流速軸を
+    迎角に置き換えたもの。Fy・Mz それぞれ1枚ずつ出力する。
+
+    spec_rows: list of {"aoa": int, "freqs": ndarray,
+                        "psd_Fy": ndarray, "psd_Mz": ndarray}
+    """
+    if not spec_rows:
+        return
+
+    # 迎角でソート。重複迎角（aoa=0 が Pdata/Mdata で2点など）は PSD を平均して統合
+    by_aoa = {}
+    freqs  = spec_rows[0]["freqs"]
+    for r in spec_rows:
+        by_aoa.setdefault(r["aoa"], []).append(r)
+    aoa_axis = np.array(sorted(by_aoa.keys()))
+
+    for axis, key, unit in [("Fy", "psd_Fy", "N"), ("Mz", "psd_Mz", "Nm")]:
+        # 周波数を表示範囲（0〜map_fmax）に制限
+        fmask  = freqs <= args.map_fmax
+        f_plot = freqs[fmask]
+
+        # Z[freq, aoa] を構築（重複迎角は平均）
+        Z = np.empty((f_plot.size, aoa_axis.size))
+        for j, a in enumerate(aoa_axis):
+            psd_stack = np.vstack([r[key][fmask] for r in by_aoa[a]])
+            Z[:, j] = psd_stack.mean(axis=0)
+
+        # dB 正規化（全体最大を 0 dB）、下限でクリップ
+        zmax = Z.max()
+        if zmax <= 0:
+            continue
+        Z_db = 10.0 * np.log10(np.maximum(Z, zmax * 1e-12) / zmax)
+        Z_db = np.clip(Z_db, -args.map_dyn_range, 0.0)
+
+        fig, ax = plt.subplots(figsize=(11, 7))
+        mesh = ax.pcolormesh(aoa_axis, f_plot, Z_db,
+                             shading="nearest", cmap="viridis",
+                             vmin=-args.map_dyn_range, vmax=0.0)
+        cbar = fig.colorbar(mesh, ax=ax)
+        cbar.set_label("Power [dB] (normalised to max)", fontsize=12)
+
+        # 卓越周波数を白点でオーバーレイ（各迎角・表示範囲内のみ）
+        peak_aoa, peak_freq = [], []
+        for a in aoa_axis:
+            psd_mean = np.vstack([r[key][fmask] for r in by_aoa[a]]).mean(axis=0)
+            if psd_mean.size and np.any(psd_mean > 0):
+                peak_aoa.append(a)
+                peak_freq.append(f_plot[np.argmax(psd_mean)])
+        ax.scatter(peak_aoa, peak_freq, s=14, facecolors="none",
+                   edgecolors="white", linewidths=0.8, zorder=3,
+                   label="dominant freq")
+
+        ax.set_xlabel("Angle of attack [deg]", fontsize=13)
+        ax.set_ylabel("Frequency [Hz]", fontsize=13)
+        ax.set_ylim(0, args.map_fmax)
+        ax.set_title(f"AoA-frequency map  {axis} [{unit}]   U ≈ {rep_U:.2f} m/s",
+                     fontsize=13)
+        ax.legend(fontsize=10, loc="upper right")
+
+        fname = f"aoa_freq_map_{axis}.png"
+        fig.savefig(os.path.join(exp_dir, fname), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  [マップ] {fname} を保存しました")
 
 
 # ============================================================
@@ -585,6 +677,20 @@ def main():
         exp_dir = args.exp_dir.rstrip("/\\")
         log     = load_log(exp_dir)
         ofst_dir = log.get("ofst_dir", "")
+
+        # ログの ofst_dir が解決できない場合（別PCで取得したデータ等）は、
+        # 条件フォルダ名から `<親>/<base>_ofst` を自動探索するフォールバック
+        if not ofst_dir or not os.path.isdir(ofst_dir):
+            cond_name = os.path.basename(exp_dir)         # 例: 260624_flutter_c07
+            base_name = re.sub(r"_c\d+$", "", cond_name)  # 例: 260624_flutter
+            parent    = os.path.dirname(exp_dir)
+            for cand in (os.path.join(parent, f"{base_name}_ofst"),
+                         os.path.join(exp_dir, f"{base_name}_ofst")):
+                if os.path.isdir(cand):
+                    print(f"[ofst] ログのパスが解決できないため自動探索: {cand}")
+                    ofst_dir = cand
+                    break
+
         if not ofst_dir or not os.path.isdir(ofst_dir):
             print(f"[エラー] ofst_dir が見つかりません: {ofst_dir}", file=sys.stderr)
             sys.exit(1)
