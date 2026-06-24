@@ -232,6 +232,8 @@ while ph_idx <= n_phases
         end
 
         try
+            cap_proc = [];   % 非同期撮影プロセスのハンドル（撮影点でのみ設定）
+
             % ------ a. 迎角ステージ移動 ------
             fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
             stage.moveToAngle(pt.target_angle);
@@ -258,6 +260,16 @@ while ph_idx <= n_phases
 
             if ~logger.isAlive()
                 error('[LeptrinoLogger] Python プロセスの起動に失敗しました。\n  python_exe や leptrino_port を確認してください。');
+            end
+
+            % ------ d2. 写真撮影を力計測と並行で非同期起動（通風時の各迎角＋最初の0°）------
+            %  迎角を保持している計測中にバックグラウンドでシャッターを切る（直列にせず短縮）。
+            %  カメラ=Wi-Fi／力センサ=USB／デジボル=シリアルで経路が独立。完了待ち(join)は
+            %  下の j でステージ移動前に行う。撮影失敗は計測を止めない。
+            if take_photos && is_wind_phase_(phase) && (pt.suffix == 1 || idx == 1)
+                cap_label = angle_label_(pt.target_angle);
+                cap_proc  = start_capture_async_(cfg.python_exe, photo_script, ...
+                    photo_dir, cap_label, 3, pt.target_angle, phase);
             end
 
             % ------ e. デジボル計測ループ（6軸センサが完了するまで続ける）------
@@ -346,19 +358,21 @@ while ph_idx <= n_phases
             append_volt_summary_(summary_path, idx - 1, pt.target_angle, fname_short, voltages);
             fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
 
-            % ------ j. 写真撮影（通風フェーズのみ。各迎角＋最初の0°で3枚）------
-            %  迎角を保持したまま、力計測の保存後に撮影する（撮影の失敗・遅延が
-            %  力データに影響しないよう、計測の後に実行）。0°は各点に戻る度では
-            %  なく最初の点(idx==1)でのみ撮る。撮影失敗は計測を止めない。
-            if take_photos && is_wind_phase_(phase) && (pt.suffix == 1 || idx == 1)
-                label = angle_label_(pt.target_angle);
-                capture_photos_(cfg.python_exe, photo_script, photo_dir, label, 3, ...
-                                pt.target_angle, phase);
+            % ------ j. 並行撮影の完了待ち（d2で起動したぶんをステージ移動前にjoin）------
+            %  タイムアウト付き。カメラがハングしても力計測（本命）は止めない。
+            if ~isempty(cap_proc)
+                wait_capture_async_(cap_proc, cap_label, 15);
+                cap_proc = [];
             end
 
             idx = idx + 1;   % 正常完了 → 次の計測点へ
 
         catch ME_meas
+            % 並行撮影プロセスが走っていれば破棄（角度が変わる前に止める）
+            if exist('cap_proc', 'var') && ~isempty(cap_proc)
+                try; cap_proc.destroy(); catch; end
+                cap_proc = [];
+            end
             % ------ エラー発生 → 対処を確認 ------
             action_str = ask_error_action_(ME_meas, phase, idx, n_total);
             switch action_str
@@ -1046,7 +1060,9 @@ function [take_photos, photo_dir] = setup_photos_(picture_dir)
         % _shot_manifest.csv に記録し、実験後にSDから photo_import.py で取り込む。
         manifest = fullfile(photo_dir, '_shot_manifest.csv');
         if isfile(manifest), delete(manifest); end   % 古い記録は消して撮り直す
-        fprintf('→ 撮影します。各迎角で3枚ずつシャッターを切り、SDカードに保存します。\n');
+        capture_log = fullfile(photo_dir, '_capture.log');
+        if isfile(capture_log), delete(capture_log); end
+        fprintf('→ 撮影します。各迎角で3枚ずつシャッターを切り、SDカードに保存します（力計測と並行）。\n');
         fprintf('  （実験後にSDからPCへ取り込み: post_process/photo_import.py）\n');
         fprintf('[準備] 写真フォルダ : %s\n', photo_dir);
         fprintf('[準備] 撮影記録     : %s\n\n', manifest);
@@ -1099,21 +1115,58 @@ function ok = confirm_photo_connection_(python_exe, photo_script)
     end
 end
 
-function capture_photos_(python_exe, photo_script, photo_dir, label, count, angle, phase)
-    % 指定迎角で count 枚シャッターを切り、SDカードに保存する（DLNA転送はしない）。
-    %  各ショットは photo_dir/_shot_manifest.csv に撮影順・成功可否で記録する。
-    %  接続・シャッターはリトライ付き。撮影失敗は計測を止めない（記録して継続）。
+function proc = start_capture_async_(python_exe, photo_script, photo_dir, label, count, angle, phase)
+    % 力計測と並行してカメラ撮影を非同期起動する（java.lang.ProcessBuilder）。
+    %  迎角を保持している計測中にバックグラウンドでシャッターを切り、SDに保存する。
+    %  各ショットは photo_dir/_shot_manifest.csv に記録。子プロセスの出力は
+    %  photo_dir/_capture.log に書き出す（パイプ詰まり防止＋後で確認用。最新の点で上書き）。
+    %  起動できなければ [] を返す（撮影は補助なので計測は止めない）。
+    %  ※ ProcessBuilder は引数を個別に渡すため、パスに空白があっても安全。
+    proc = [];
     manifest = fullfile(photo_dir, '_shot_manifest.csv');
-    cmd = sprintf(['"%s" "%s" --shutter-only --name "%s" --count %d ' ...
-                   '--manifest "%s" --angle %d --phase "%s"'], ...
-        python_exe, photo_script, label, count, manifest, angle, phase);
-    [st, out] = system(cmd);
-    if ~isempty(strtrim(out)), fprintf('%s\n', out); end
-    if st == 0
-        fprintf('[撮影] %s を %d 枚 SDに保存しました（後でPCへ取り込み）。\n\n', label, count);
-    else
-        fprintf('[撮影][警告] %s の撮影で失敗がありました（記録済み・実験は続行）。\n\n', label);
+    logfile  = fullfile(photo_dir, '_capture.log');
+    try
+        cmd = java.util.ArrayList();
+        cmd.add(python_exe);
+        cmd.add(photo_script);
+        cmd.add('--shutter-only');
+        cmd.add('--name');     cmd.add(label);
+        cmd.add('--count');    cmd.add(num2str(count));
+        cmd.add('--manifest'); cmd.add(manifest);
+        cmd.add(['--angle=' num2str(angle)]);   % 負角(-5等)を1トークンで渡す（argparse対策）
+        cmd.add('--phase');    cmd.add(phase);
+        pb = java.lang.ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(java.io.File(logfile));   % File オーバーロード（入れ子クラス未使用）
+        proc = pb.start();
+        fprintf('[撮影] %s を %d 枚 バックグラウンド撮影（力計測と並行）...\n', label, count);
+    catch ME
+        fprintf('[撮影][警告] 撮影プロセスを起動できませんでした: %s\n', ME.message);
+        proc = [];
     end
+end
+
+function wait_capture_async_(proc, label, timeout_sec)
+    % start_capture_async_ で起動した撮影プロセスの完了を最大 timeout_sec 待つ。
+    %  完了すれば終了コードで成否を表示。タイムアウト時は破棄して計測を続行する
+    %  （カメラ不調でも力計測＝本命を止めないため）。詳細は _capture.log。
+    if isempty(proc), return; end
+    t0 = tic;
+    while toc(t0) < timeout_sec
+        try
+            ev = proc.exitValue();   % 未終了なら例外、終了済みなら終了コード
+            if ev == 0
+                fprintf('[撮影] %s 完了（SDに保存）。\n\n', label);
+            else
+                fprintf('[撮影][警告] %s に失敗がありました（記録済み・続行）。\n\n', label);
+            end
+            return;
+        catch
+            pause(0.2);   % まだ実行中
+        end
+    end
+    try; proc.destroy(); catch; end
+    fprintf('[撮影][警告] %s の撮影がタイムアウト（%.0f秒）。計測は続行します。\n\n', label, timeout_sec);
 end
 
 function notify_sound_(n_tones)
