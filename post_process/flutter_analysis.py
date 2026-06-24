@@ -148,7 +148,16 @@ def resample_uniform(t, x, fs=FS_TARGET):
 
     センサ実レート（≈1209 Hz）とPCタイマの差によるビート周波数偽ピークを
     防ぐためのリサンプリング（添付資料の指摘事項への対処）。
+
+    PCタイマの分解能不足でタイムスタンプが重複・非単調になることがあるため、
+    cubic補間（x が狭義単調増加であることを要求）の前に重複点を除去する。
     """
+    # 狭義単調増加になるよう、t が増加しない点を除外（最初の出現を残す）
+    keep = np.concatenate(([True], np.diff(t) > 0))
+    if not keep.all():
+        t = t[keep]
+        x = x[keep]
+
     t_uniform = np.arange(t[0], t[-1], 1.0 / fs)
     f_interp  = interpolate.interp1d(t, x, kind="cubic", bounds_error=False,
                                       fill_value="extrapolate")
@@ -396,33 +405,33 @@ def _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
     fig.suptitle(f"AoA = {aoa:+d}°   ({short})", fontsize=13)
 
     # --- 上段: 時系列（オフセット補正済み・平均引き済み） ---
-    axes[0, 0].plot(t_u, Fy_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst補正済み")
-    axes[0, 0].plot(t_u, Fy_hp, lw=0.8, color="red",      alpha=0.9, label="フラッター成分(HP)")
-    axes[0, 0].set_xlabel("時間 [s]"); axes[0, 0].set_ylabel("Fy [N]")
-    axes[0, 0].set_title("Fy 時系列"); axes[0, 0].legend(fontsize=8); axes[0, 0].grid(True)
+    axes[0, 0].plot(t_u, Fy_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
+    axes[0, 0].plot(t_u, Fy_hp, lw=0.8, color="red",      alpha=0.9, label="Flutter comp. (HP)")
+    axes[0, 0].set_xlabel("Time [s]"); axes[0, 0].set_ylabel("Fy [N]")
+    axes[0, 0].set_title("Fy time series"); axes[0, 0].legend(fontsize=8); axes[0, 0].grid(True)
 
-    axes[0, 1].plot(t_u, Mz_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst補正済み")
-    axes[0, 1].plot(t_u, Mz_hp, lw=0.8, color="red",      alpha=0.9, label="フラッター成分(HP)")
-    axes[0, 1].set_xlabel("時間 [s]"); axes[0, 1].set_ylabel("Mz [Nm]")
-    axes[0, 1].set_title("Mz 時系列"); axes[0, 1].legend(fontsize=8); axes[0, 1].grid(True)
+    axes[0, 1].plot(t_u, Mz_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
+    axes[0, 1].plot(t_u, Mz_hp, lw=0.8, color="red",      alpha=0.9, label="Flutter comp. (HP)")
+    axes[0, 1].set_xlabel("Time [s]"); axes[0, 1].set_ylabel("Mz [Nm]")
+    axes[0, 1].set_title("Mz time series"); axes[0, 1].legend(fontsize=8); axes[0, 1].grid(True)
 
     # --- 中段: PSD ---
     axes[1, 0].semilogy(freqs_Fy, psd_Fy, color="steelblue", lw=1.0)
-    axes[1, 0].set_xlabel("周波数 [Hz]"); axes[1, 0].set_ylabel("PSD [N²/Hz]")
+    axes[1, 0].set_xlabel("Frequency [Hz]"); axes[1, 0].set_ylabel("PSD [N²/Hz]")
     axes[1, 0].set_title("Fy PSD (Welch)"); axes[1, 0].set_xlim(0, 200); axes[1, 0].grid(True)
 
     axes[1, 1].semilogy(freqs_Mz, psd_Mz, color="steelblue", lw=1.0)
-    axes[1, 1].set_xlabel("周波数 [Hz]"); axes[1, 1].set_ylabel("PSD [Nm²/Hz]")
+    axes[1, 1].set_xlabel("Frequency [Hz]"); axes[1, 1].set_ylabel("PSD [Nm²/Hz]")
     axes[1, 1].set_title("Mz PSD (Welch)"); axes[1, 1].set_xlim(0, 200); axes[1, 1].grid(True)
 
     # --- 下段: RMS時間推移（LCO収束確認） ---
     axes[2, 0].plot(t_rms_Fy, rms_t_Fy, marker="o", ms=3, color="tomato", lw=1.2)
-    axes[2, 0].set_xlabel("時間 [s]"); axes[2, 0].set_ylabel("RMS [N]")
-    axes[2, 0].set_title(f"Fy RMS推移（窓幅={RMS_WINDOW_SEC}s）"); axes[2, 0].grid(True)
+    axes[2, 0].set_xlabel("Time [s]"); axes[2, 0].set_ylabel("RMS [N]")
+    axes[2, 0].set_title(f"Fy RMS trend (window={RMS_WINDOW_SEC}s)"); axes[2, 0].grid(True)
 
     axes[2, 1].plot(t_rms_Mz, rms_t_Mz, marker="o", ms=3, color="tomato", lw=1.2)
-    axes[2, 1].set_xlabel("時間 [s]"); axes[2, 1].set_ylabel("RMS [Nm]")
-    axes[2, 1].set_title(f"Mz RMS推移（窓幅={RMS_WINDOW_SEC}s）"); axes[2, 1].grid(True)
+    axes[2, 1].set_xlabel("Time [s]"); axes[2, 1].set_ylabel("RMS [Nm]")
+    axes[2, 1].set_title(f"Mz RMS trend (window={RMS_WINDOW_SEC}s)"); axes[2, 1].grid(True)
 
     fig.tight_layout()
     fig.savefig(os.path.join(fig_dir, f"{short}.png"), dpi=120, bbox_inches="tight")
@@ -493,8 +502,8 @@ def plot_flutter_map(summaries, out_dir):
         ("Mz", "flutter_A_Mz", "flutter_B_Mz", "Nm"),
     ]:
         for route, col, label in [
-            ("A_threshold", col_A, f"ルートA（RMS閾値）"),
-            ("B_snr",       col_B, f"ルートB（スペクトルSNR）"),
+            ("A_threshold", col_A, "Route A (RMS threshold)"),
+            ("B_snr",       col_B, "Route B (spectral SNR)"),
         ]:
             fig, ax = plt.subplots(figsize=(10, 7))
 
@@ -516,12 +525,12 @@ def plot_flutter_map(summaries, out_dir):
                            marker="o", s=50, color="royalblue", zorder=3, label="_")
 
             # 凡例用ダミー
-            ax.scatter([], [], marker="x", color="red",        label="フラッター発生")
-            ax.scatter([], [], marker="o", color="royalblue",   label="フラッターなし")
+            ax.scatter([], [], marker="x", color="red",        label="Flutter")
+            ax.scatter([], [], marker="o", color="royalblue",   label="No flutter")
 
-            ax.set_xlabel("迎角 [deg]", fontsize=13)
-            ax.set_ylabel("代表風速 U [m/s]", fontsize=13)
-            ax.set_title(f"フラッター発生マップ  {axis} [{unit}]  {label}", fontsize=13)
+            ax.set_xlabel("Angle of attack [deg]", fontsize=13)
+            ax.set_ylabel("Representative wind speed U [m/s]", fontsize=13)
+            ax.set_title(f"Flutter map  {axis} [{unit}]  {label}", fontsize=13)
             ax.legend(fontsize=11)
             ax.grid(True, alpha=0.4)
 
@@ -549,10 +558,10 @@ def plot_rms_overview(summaries, out_dir):
                      lw=1.2, color=color, label=label)
 
     for ax, ylabel, title in [
-        (axes[0], "RMS [N]",  "Fy フラッター振幅 RMS"),
-        (axes[1], "RMS [Nm]", "Mz フラッター振幅 RMS"),
+        (axes[0], "RMS [N]",  "Fy flutter amplitude RMS"),
+        (axes[1], "RMS [Nm]", "Mz flutter amplitude RMS"),
     ]:
-        ax.set_xlabel("迎角 [deg]", fontsize=12)
+        ax.set_xlabel("Angle of attack [deg]", fontsize=12)
         ax.set_ylabel(ylabel, fontsize=12)
         ax.set_title(title, fontsize=12)
         ax.legend(fontsize=9, ncol=2)
