@@ -137,6 +137,13 @@ while true
     input(sprintf('ブロワーを起動し、風速が安定したら Enter を押してください: '), 's');
     fprintf('\n');
 
+    % ---- 代表風速計測の前に迎角を 0° に戻す ----
+    % （直前の Mofst フェーズで -max_angle° に取り残されているため）
+    fprintf('[代表風速計測] 迎角を 0° に戻しています...\n');
+    stage.moveToAngle(0);
+    fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+    pause(cfg.angle_settle_sec);
+
     % ---- 代表風速の自動計測 ----
     [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met);
 
