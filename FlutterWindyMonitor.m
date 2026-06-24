@@ -71,11 +71,30 @@ classdef FlutterWindyMonitor < handle
         % 6軸グラフ独立タイマ
         force_logger_fn_
         force_timer_
+
+        % Y軸安定化オートスケール状態
+        ylim_force_      % [lo hi] 現在の Fx/Fy/Fz 軸表示レンジ（[] は未初期化）
+        ylim_moment_     % [lo hi] 現在の Mx/My/Mz 軸表示レンジ
     end
 
     properties (Constant, Access = private)
-        N_DISP_ROWS = 600
-        TIMER_PERIOD = 0.15
+        WINDOW_SEC   = 3.0       % 表示時間窓 [s]
+        SENSOR_HZ    = 1200      % Leptrino サンプリング周波数 [Hz]
+        N_DISP_ROWS  = 3600      % 表示行数 = WINDOW_SEC * SENSOR_HZ
+        TIMER_PERIOD = 0.15      % グラフ更新周期 [s]
+
+        % 表示用データ処理（保存CSVには非適用・表示専用）
+        SMOOTH_WIN   = 7         % 移動平均窓 [点]（≈5.8ms / ノイズのみ除去）
+        DECIM        = 4         % ダウンサンプリング間引き率
+
+        % Y軸安定化オートスケール
+        Y_MARGIN     = 0.10      % レンジに付けるマージン（10%）
+        Y_QLO        = 0.005     % 下側分位点（下0.5%を外れ値として無視）
+        Y_QHI        = 0.995     % 上側分位点（上0.5%を外れ値として無視）
+        Y_ALPHA      = 0.15      % EMA追従係数（小さいほど滑らか・振れにくい）
+        Y_DEADZONE   = 0.05      % デッドゾーン（目標が現レンジの±5%以内なら更新しない）
+        MIN_RANGE_F  = 0.5       % force 軸の最小レンジ幅 [N]
+        MIN_RANGE_M  = 0.05      % moment 軸の最小レンジ幅 [Nm]
     end
 
     methods
@@ -91,6 +110,8 @@ classdef FlutterWindyMonitor < handle
             obj.BAR_Y1          = 0.42;
             obj.force_logger_fn_ = [];
             obj.force_timer_     = [];
+            obj.ylim_force_      = [];
+            obj.ylim_moment_     = [];
             obj.conditionLabel_ = '---';
             obj.currentPhase_   = '---';
             obj.timeLimitSec_   = [];
@@ -184,6 +205,10 @@ classdef FlutterWindyMonitor < handle
 
             obj.buf_nv_ = 0;
             obj.buf_v_(:) = 0;
+
+            % Y軸安定化オートスケールの状態を初期化（前点の値域を引きずらない）
+            obj.ylim_force_   = [];
+            obj.ylim_moment_  = [];
 
             set(obj.ln_Fx_, 'XData', NaN, 'YData', NaN);
             set(obj.ln_Fy_, 'XData', NaN, 'YData', NaN);
@@ -294,7 +319,8 @@ classdef FlutterWindyMonitor < handle
 
             % ---- 6軸グラフ 左（Fx/Fy/Fz）----
             obj.ax_force_ = axes('Parent', obj.fig_, ...
-                'Position', [0.05, 0.37, 0.42, 0.47], 'Color', 'white');
+                'Position', [0.05, 0.37, 0.42, 0.47], 'Color', 'white', ...
+                'XLim', [-obj.WINDOW_SEC, 0]);   % 右端=最新・左へ流れる固定窓
             hold(obj.ax_force_, 'on');
             grid(obj.ax_force_, 'on');
             obj.ln_Fx_ = line(obj.ax_force_, NaN, NaN, ...
@@ -304,13 +330,14 @@ classdef FlutterWindyMonitor < handle
             obj.ln_Fz_ = line(obj.ax_force_, NaN, NaN, ...
                 'Color', [0.00 0.45 0.74], 'LineWidth', 1.0, 'DisplayName', 'Fz');
             legend(obj.ax_force_, 'Location', 'northwest', 'FontSize', 9);
-            xlabel(obj.ax_force_, '時間 [s]', 'FontSize', 9);
+            xlabel(obj.ax_force_, '時間 [s]（右端=最新）', 'FontSize', 9);
             ylabel(obj.ax_force_, '[N]', 'FontSize', 10);
             title(obj.ax_force_,  'Fx  /  Fy  /  Fz', 'FontSize', 11);
 
             % ---- 6軸グラフ 右（Mx/My/Mz）----
             obj.ax_moment_ = axes('Parent', obj.fig_, ...
-                'Position', [0.55, 0.37, 0.42, 0.47], 'Color', 'white');
+                'Position', [0.55, 0.37, 0.42, 0.47], 'Color', 'white', ...
+                'XLim', [-obj.WINDOW_SEC, 0]);   % 右端=最新・左へ流れる固定窓
             hold(obj.ax_moment_, 'on');
             grid(obj.ax_moment_, 'on');
             obj.ln_Mx_ = line(obj.ax_moment_, NaN, NaN, ...
@@ -320,7 +347,7 @@ classdef FlutterWindyMonitor < handle
             obj.ln_Mz_ = line(obj.ax_moment_, NaN, NaN, ...
                 'Color', [0.00 0.45 0.74], 'LineWidth', 1.0, 'DisplayName', 'Mz');
             legend(obj.ax_moment_, 'Location', 'northwest', 'FontSize', 9);
-            xlabel(obj.ax_moment_, '時間 [s]', 'FontSize', 9);
+            xlabel(obj.ax_moment_, '時間 [s]（右端=最新）', 'FontSize', 9);
             ylabel(obj.ax_moment_, '[Nm]', 'FontSize', 10);
             title(obj.ax_moment_,  'Mx  /  My  /  Mz', 'FontSize', 11);
 
@@ -374,15 +401,100 @@ classdef FlutterWindyMonitor < handle
                 rows = obj.force_logger_fn_();
                 n = size(rows, 1);
                 if n < 2, return; end
-                t = rows(:, 1) - rows(1, 1);
-                set(obj.ln_Fx_, 'XData', t, 'YData', rows(:, 2));
-                set(obj.ln_Fy_, 'XData', t, 'YData', rows(:, 3));
-                set(obj.ln_Fz_, 'XData', t, 'YData', rows(:, 4));
-                set(obj.ln_Mx_, 'XData', t, 'YData', rows(:, 5));
-                set(obj.ln_My_, 'XData', t, 'YData', rows(:, 6));
-                set(obj.ln_Mz_, 'XData', t, 'YData', rows(:, 7));
+
+                % ---- 時間軸: 最新行を 0、過去を負値 → 右端=最新・左へ流れる ----
+                t = rows(:, 1) - rows(end, 1);
+
+                % ---- 表示用データ処理（移動平均＋ダウンサンプリング）----
+                %   保存CSVの生データには非適用・表示専用
+                w = min(obj.SMOOTH_WIN, n);
+                Fx = movmean(rows(:, 2), w);  Fy = movmean(rows(:, 3), w);
+                Fz = movmean(rows(:, 4), w);  Mx = movmean(rows(:, 5), w);
+                My = movmean(rows(:, 6), w);  Mz = movmean(rows(:, 7), w);
+
+                idx = 1:obj.DECIM:n;          % 間引きインデックス
+                if idx(end) ~= n, idx = [idx, n]; end   % 最新点は必ず残す
+                td = t(idx);
+                Fx = Fx(idx); Fy = Fy(idx); Fz = Fz(idx);
+                Mx = Mx(idx); My = My(idx); Mz = Mz(idx);
+
+                set(obj.ln_Fx_, 'XData', td, 'YData', Fx);
+                set(obj.ln_Fy_, 'XData', td, 'YData', Fy);
+                set(obj.ln_Fz_, 'XData', td, 'YData', Fz);
+                set(obj.ln_Mx_, 'XData', td, 'YData', Mx);
+                set(obj.ln_My_, 'XData', td, 'YData', My);
+                set(obj.ln_Mz_, 'XData', td, 'YData', Mz);
+
+                % ---- Y軸 安定化オートスケール（ロバスト統計＋EMA追従）----
+                obj.ylim_force_  = obj.stable_ylim_(obj.ax_force_, ...
+                    obj.ylim_force_,  [Fx; Fy; Fz], obj.MIN_RANGE_F);
+                obj.ylim_moment_ = obj.stable_ylim_(obj.ax_moment_, ...
+                    obj.ylim_moment_, [Mx; My; Mz], obj.MIN_RANGE_M);
+
                 drawnow limitrate
             catch
+            end
+        end
+
+        function ylim_new = stable_ylim_(obj, ax, ylim_cur, data, min_range)
+            % 安定化オートスケール（ロバスト統計＋EMA追従）:
+            %   - 分位点で目標レンジを決め、単発スパイク（外れ値）に引っ張られない。
+            %     → 一瞬の大値では拡大せず、間延びも残らない。
+            %   - 現レンジを目標へ EMA で滑らかに寄せる（固定ではなく「振れにくい」）。
+            %   - 上下の発散はどちらも数周期続くため分位点でも追従できる。
+
+            % --- ロバストな目標レンジ（上下 Y_QLO/Y_QHI で外れ値を無視）---
+            dlo = obj.quantile_(data, obj.Y_QLO);
+            dhi = obj.quantile_(data, obj.Y_QHI);
+
+            % 最小レンジ幅を保証（無入力・微小信号時の過剰ズーム防止）
+            span = dhi - dlo;
+            if span < min_range
+                mid = (dhi + dlo) / 2;
+                dlo = mid - min_range / 2;
+                dhi = mid + min_range / 2;
+                span = min_range;
+            end
+            pad = span * obj.Y_MARGIN;
+            tgt = [dlo - pad, dhi + pad];
+
+            % 初回は目標をそのまま採用
+            if isempty(ylim_cur)
+                ylim_new = tgt;
+                ylim(ax, ylim_new);
+                return;
+            end
+
+            % デッドゾーン: 目標が現レンジにほぼ収まっていれば更新しない（微動抑制）
+            cur_span = ylim_cur(2) - ylim_cur(1);
+            dz = cur_span * obj.Y_DEADZONE;
+            if abs(tgt(1) - ylim_cur(1)) < dz && abs(tgt(2) - ylim_cur(2)) < dz
+                ylim_new = ylim_cur;
+                return;
+            end
+
+            % EMA で目標へ滑らかに追従（拡大・縮小とも同じ係数）
+            ylim_new = ylim_cur + obj.Y_ALPHA * (tgt - ylim_cur);
+            ylim(ax, ylim_new);
+        end
+
+        function q = quantile_(~, x, p)
+            % Statistics Toolbox 非依存の分位点（線形補間）。
+            %   p は 0〜1。x は配列（NaN は除外）。
+            x = sort(x(~isnan(x)));
+            m = numel(x);
+            if m == 0
+                q = 0; return;
+            elseif m == 1
+                q = x(1); return;
+            end
+            pos  = (m - 1) * p + 1;        % 1始まりの補間位置
+            lo   = floor(pos);
+            frac = pos - lo;
+            if lo >= m
+                q = x(m);
+            else
+                q = x(lo) * (1 - frac) + x(lo + 1) * frac;
             end
         end
 

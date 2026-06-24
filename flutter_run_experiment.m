@@ -59,7 +59,7 @@ s_volt = connect_r6441b_(cfg.r6441b_port, cfg.r6441b_timeout_sec);
 
 % FlutterWindyMonitor を使用（秒数表示・ケース名表示に対応）
 monitor = FlutterWindyMonitor(cfg.force_sensor_size_limit_kb);
-monitor.setDataSource(@() logger.getRecentRows(600));
+monitor.setDataSource(@() logger.getRecentRows(3600));  % 直近3秒分（= 3.0s × 1200Hz）
 
 % 解放ガード
 flutter_cleanup_guard_ = onCleanup(@() cleanup_devices_(stage, logger, s_volt, monitor)); %#ok<NASGU>
