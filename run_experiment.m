@@ -1138,20 +1138,19 @@ function proc = start_capture_async_(python_exe, photo_script, photo_dir, label,
     manifest = fullfile(photo_dir, '_shot_manifest.csv');
     logfile  = fullfile(photo_dir, '_capture.log');
     try
-        % MATLAB char を ArrayList.add(Object) にそのまま渡すと char[] になり、
-        % ProcessBuilder.start() の toArray(String[]) で ArrayStoreException になる。
-        % 各要素を java.lang.String に明示変換して回避する。
-        S = @(x) java.lang.String(x);
-        cmd = java.util.ArrayList();
-        cmd.add(S(python_exe));
-        cmd.add(S(photo_script));
-        cmd.add(S('--shutter-only'));
-        cmd.add(S('--name'));     cmd.add(S(label));
-        cmd.add(S('--count'));    cmd.add(S(num2str(count)));
-        cmd.add(S('--manifest')); cmd.add(S(manifest));
-        cmd.add(S(['--angle=' num2str(angle)]));   % 負角(-5等)を1トークンで渡す（argparse対策）
-        cmd.add(S('--phase'));    cmd.add(S(phase));
-        pb = java.lang.ProcessBuilder(cmd);
+        % 引数は java.lang.String[] を明示的に作って渡す。
+        %  ・cellstr/char を ArrayList.add(Object) に渡すと char[] 扱いになり、
+        %    ProcessBuilder.start() の toArray(String[]) で ArrayStoreException になる
+        %  ・無名関数(@(x)...)経由は一部環境で評価エラーになるため使わない
+        argv = { python_exe, photo_script, '--shutter-only', ...
+                 '--name', label, '--count', num2str(count), ...
+                 '--manifest', manifest, ['--angle=' num2str(angle)], ...
+                 '--phase', phase };   % 負角(-5等)は --angle=-5 の1トークンで（argparse対策）
+        jargs = javaArray('java.lang.String', numel(argv));
+        for ai = 1:numel(argv)
+            jargs(ai) = java.lang.String(argv{ai});
+        end
+        pb = java.lang.ProcessBuilder(jargs);
         pb.redirectErrorStream(true);
         pb.redirectOutput(java.io.File(logfile));   % File オーバーロード（入れ子クラス未使用）
         proc = pb.start();
