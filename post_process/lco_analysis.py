@@ -566,15 +566,146 @@ def plot_all_conditions(lco_data, map_dir, args):
 
     lco_data : list of (rep_U, lco_rows)
 
-    NOTE: 本体はステップ3・4で実装する。現状は呼ばれても安全に何もしない。
+    NOTE: 風速版スペクトログラム（ステップ4）は別途追加する。
     """
     if not lco_data:
         return
-    # TODO(step3): 分岐図 bifurcation_*.png（Poincaré点を制御パラメータで束ねる）
-    # TODO(step3): 周波数合流図 freq_coalescence.png（Fy/Mz 卓越周波数）
-    # TODO(step3): lco_metric_map_*.png
-    # TODO(step4): 風速版スペクトログラム spectrogram_speed_*.png
-    return
+    names = [s.strip() for s in args.lco_signals.split(",") if s.strip()]
+    plot_bifurcation(lco_data, map_dir, names)
+    plot_freq_coalescence(lco_data, map_dir, names)
+    plot_lco_metric_map(lco_data, map_dir, names)
+
+
+def plot_bifurcation(lco_data, map_dir, names):
+    """分岐図（Trickey fig.3）。横軸=迎角、縦軸=Poincaré点の振幅。
+
+    各風速条件を1枚に重ね、フラッター発生迎角域での応答の質（1点に集中＝
+    periodic / 縦に散らばる＝QP・chaos）を俯瞰する。風速ごとに色分け。
+
+    この実験系では迎角が主要な制御パラメータのため、横軸を迎角にとる。
+    """
+    for name in names:
+        pkey = f"poincare_{name}"
+        fig, ax = plt.subplots(figsize=(11, 6))
+        cmap = plt.get_cmap("viridis")
+        us = [u for u, _ in lco_data]
+        umin, umax = min(us), max(us)
+        any_pt = False
+        for rep_U, rows in lco_data:
+            color = cmap((rep_U - umin) / (umax - umin + 1e-9))
+            for r in rows:
+                pts = r.get(pkey)
+                if pts is None or len(pts) == 0:
+                    continue
+                aoa = r["aoa"]
+                ax.scatter(np.full(len(pts), aoa), pts, s=2, color=color,
+                           alpha=0.4, edgecolors="none")
+                any_pt = True
+        if not any_pt:
+            plt.close(fig)
+            continue
+
+        sm = plt.cm.ScalarMappable(cmap=cmap,
+                                   norm=plt.Normalize(vmin=umin, vmax=umax))
+        cbar = fig.colorbar(sm, ax=ax)
+        cbar.set_label("wind speed U [m/s]", fontsize=12)
+        ax.set_xlabel("Angle of attack [deg]", fontsize=13)
+        ax.set_ylabel(f"Poincaré section value ({name})", fontsize=13)
+        ax.set_title(f"Bifurcation diagram  {name}  (Poincaré amplitude vs AoA)",
+                     fontsize=13)
+        out = os.path.join(map_dir, f"bifurcation_{name}.png")
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[LCO] bifurcation_{name}.png を保存しました")
+
+
+def plot_freq_coalescence(lco_data, map_dir, names):
+    """周波数合流図（Amandolese fig.6）。横軸=風速、縦軸=卓越周波数。
+
+    Fy・Mz の卓越周波数を同じ図に重ね、連成モードフラッターで2モードの
+    周波数が近づく（合流する）様子を見る。フラッター発生点（振動が有意な点）の
+    みプロットすると合流が見やすい。loop_thickness が小さい点（明瞭なLCO）を
+    マーカーサイズで強調する。
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    markers = {"Fy": "o", "Mz": "^"}
+    colors = {"Fy": "tab:blue", "Mz": "tab:red"}
+    any_pt = False
+    for name in names:
+        f0key = f"f0_{name}"
+        tkey = f"loop_thickness_{name}"
+        for rep_U, rows in lco_data:
+            for r in rows:
+                f0 = r.get(f0key)
+                if f0 is None or not np.isfinite(f0):
+                    continue
+                thk = r.get(tkey, np.nan)
+                # 細いループ（明瞭なLCO）は大きく濃く、ノイズ的な点は小さく薄く描く
+                # （合流を見やすくするためノイズ点を目立たせない）
+                clear = np.isfinite(thk) and thk < 0.2
+                size = 70 if clear else 6
+                alpha = 0.7 if clear else 0.12
+                ax.scatter(rep_U, f0, s=size, marker=markers.get(name, "o"),
+                           color=colors.get(name, "gray"), alpha=alpha,
+                           edgecolors="none")
+                any_pt = True
+    if not any_pt:
+        plt.close(fig)
+        return
+    # 凡例（成分とサイズの意味）
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0], [0], marker=markers[n], color="w",
+                      markerfacecolor=colors[n], markersize=8, label=n)
+               for n in names if n in markers]
+    handles.append(Line2D([0], [0], marker="o", color="w",
+                          markerfacecolor="gray", markersize=10,
+                          label="clear LCO (thin loop)"))
+    ax.legend(handles=handles, fontsize=10)
+    ax.set_xlabel("wind speed U [m/s]", fontsize=13)
+    ax.set_ylabel("dominant frequency [Hz]", fontsize=13)
+    ax.set_title("Frequency coalescence  (Fy / Mz dominant freq vs U)",
+                 fontsize=13)
+    out = os.path.join(map_dir, "freq_coalescence.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("[LCO] freq_coalescence.png を保存しました")
+
+
+def plot_lco_metric_map(lco_data, map_dir, names):
+    """迎角×風速の格子に LCO 指標（loop_thickness）を重畳した俯瞰図。
+
+    loop_thickness が小さい（細い閉ループ＝明瞭な periodic LCO）ほど濃く・
+    大きく描く。フラッター発生域が迎角×風速平面のどこに広がるかを一望する。
+    4タイプの自動色分けはせず、人が読み取る材料を提示する。
+    """
+    for name in names:
+        tkey = f"loop_thickness_{name}"
+        xs, ys, cs = [], [], []
+        for rep_U, rows in lco_data:
+            for r in rows:
+                thk = r.get(tkey)
+                if thk is None or not np.isfinite(thk):
+                    continue
+                xs.append(r["aoa"]); ys.append(rep_U); cs.append(thk)
+        if not xs:
+            continue
+        cs = np.asarray(cs)
+        # 細いループほど大きいマーカー（見やすさのため反転スケール）
+        sizes = 200 * np.clip(1.0 - cs / (cs.max() + 1e-9), 0.05, 1.0)
+
+        fig, ax = plt.subplots(figsize=(11, 6))
+        sc = ax.scatter(xs, ys, c=cs, s=sizes, cmap="viridis_r",
+                        edgecolors="k", linewidths=0.3)
+        cbar = fig.colorbar(sc, ax=ax)
+        cbar.set_label("loop thickness", fontsize=12)
+        ax.set_xlabel("Angle of attack [deg]", fontsize=13)
+        ax.set_ylabel("wind speed U [m/s]", fontsize=13)
+        ax.set_title(f"LCO metric map  {name}  "
+                     f"(large & yellow = thin loop = clear LCO)", fontsize=13)
+        out = os.path.join(map_dir, f"lco_metric_map_{name}.png")
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[LCO] lco_metric_map_{name}.png を保存しました")
 
 
 # ============================================================
