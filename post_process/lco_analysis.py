@@ -93,11 +93,14 @@ def estimate_tau_autocorr(x, fs=FS_TARGET, max_lag_sec=0.5, f0=None):
         return _tau_from_f0(f0, fs)
 
     max_lag = min(int(max_lag_sec * fs), n - 1)
-    # 正側の自己相関のみ（lag 0..max_lag）
-    ac = np.correlate(x, x, mode="full")[n - 1: n + max_lag]
-    if ac[0] == 0:
+    # 正側の自己相関のみ（lag 0..max_lag）を FFT で計算（O(n log n)）。
+    # np.correlate の full は O(n^2) で 3万点超では非実用的に遅いため避ける。
+    nfft = 1 << int(np.ceil(np.log2(2 * n - 1)))
+    X = np.fft.rfft(x, nfft)
+    ac_full = np.fft.irfft(X * np.conj(X), nfft)[: max_lag + 1]
+    if ac_full[0] == 0:
         return _tau_from_f0(f0, fs)
-    ac = ac / ac[0]
+    ac = ac_full / ac_full[0]
 
     # 最初のゼロ交差（符号が正→非正に変わるラグ）
     sign = np.sign(ac)
