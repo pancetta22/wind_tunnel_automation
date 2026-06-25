@@ -504,23 +504,31 @@ def process_one_condition(exp_dir, ofst, args):
     if spec_rows:
         plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args)
 
-    return df
+    return df, spec_rows
 
 
 # ============================================================
 #  Layer 1.5: 迎角×周波数マップ（fig10風スペクトログラム）
 # ============================================================
-def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
-    """1風速条件について、横軸=迎角・縦軸=周波数・濃淡=PSD[dB] のマップを描く。
+def build_aoa_freq_grid(spec_rows, key, args):
+    """spec_rows から迎角×周波数の dB グリッドと卓越周波数線を構築する。
 
-    Trickey et al. (2002) の fig10（流速×周波数スペクトログラム）の流速軸を
-    迎角に置き換えたもの。Fy・Mz それぞれ1枚ずつ出力する。
+    Parameters
+    ----------
+    spec_rows : list of {"aoa": int, "freqs": ndarray,
+                         "psd_Fy": ndarray, "psd_Mz": ndarray}
+    key       : "psd_Fy" or "psd_Mz"
 
-    spec_rows: list of {"aoa": int, "freqs": ndarray,
-                        "psd_Fy": ndarray, "psd_Mz": ndarray}
+    Returns
+    -------
+    aoa_axis : ndarray   迎角軸（昇順・重複統合済み）
+    f_plot   : ndarray   周波数軸（0〜map_fmax）
+    Z_db     : ndarray   [freq, aoa] の dB 値（全体最大を 0 dB に正規化）
+    peak_aoa, peak_freq : list  各迎角の卓越周波数
+    None を返す場合はデータが空 or 全ゼロ。
     """
     if not spec_rows:
-        return
+        return None
 
     # 迎角でソート。重複迎角（aoa=0 が Pdata/Mdata で2点など）は PSD を平均して統合
     by_aoa = {}
@@ -529,23 +537,42 @@ def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
         by_aoa.setdefault(r["aoa"], []).append(r)
     aoa_axis = np.array(sorted(by_aoa.keys()))
 
+    fmask  = freqs <= args.map_fmax
+    f_plot = freqs[fmask]
+
+    # Z[freq, aoa] を構築（重複迎角は平均）
+    Z = np.empty((f_plot.size, aoa_axis.size))
+    for j, a in enumerate(aoa_axis):
+        Z[:, j] = np.vstack([r[key][fmask] for r in by_aoa[a]]).mean(axis=0)
+
+    zmax = Z.max()
+    if zmax <= 0:
+        return None
+    Z_db = 10.0 * np.log10(np.maximum(Z, zmax * 1e-12) / zmax)
+    Z_db = np.clip(Z_db, -args.map_dyn_range, 0.0)
+
+    # 卓越周波数線（各迎角・表示範囲内）
+    peak_aoa, peak_freq = [], []
+    for j, a in enumerate(aoa_axis):
+        col = Z[:, j]
+        if np.any(col > 0):
+            peak_aoa.append(a)
+            peak_freq.append(f_plot[np.argmax(col)])
+
+    return aoa_axis, f_plot, Z_db, peak_aoa, peak_freq
+
+
+def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
+    """1風速条件について、横軸=迎角・縦軸=周波数・濃淡=PSD[dB] のマップを描く。
+
+    Trickey et al. (2002) の fig10（流速×周波数スペクトログラム）の流速軸を
+    迎角に置き換えたもの。Fy・Mz それぞれ1枚ずつ出力する。
+    """
     for axis, key, unit in [("Fy", "psd_Fy", "N"), ("Mz", "psd_Mz", "Nm")]:
-        # 周波数を表示範囲（0〜map_fmax）に制限
-        fmask  = freqs <= args.map_fmax
-        f_plot = freqs[fmask]
-
-        # Z[freq, aoa] を構築（重複迎角は平均）
-        Z = np.empty((f_plot.size, aoa_axis.size))
-        for j, a in enumerate(aoa_axis):
-            psd_stack = np.vstack([r[key][fmask] for r in by_aoa[a]])
-            Z[:, j] = psd_stack.mean(axis=0)
-
-        # dB 正規化（全体最大を 0 dB）、下限でクリップ
-        zmax = Z.max()
-        if zmax <= 0:
+        grid = build_aoa_freq_grid(spec_rows, key, args)
+        if grid is None:
             continue
-        Z_db = 10.0 * np.log10(np.maximum(Z, zmax * 1e-12) / zmax)
-        Z_db = np.clip(Z_db, -args.map_dyn_range, 0.0)
+        aoa_axis, f_plot, Z_db, peak_aoa, peak_freq = grid
 
         fig, ax = plt.subplots(figsize=(11, 7))
         mesh = ax.pcolormesh(aoa_axis, f_plot, Z_db,
@@ -554,13 +581,6 @@ def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
         cbar = fig.colorbar(mesh, ax=ax)
         cbar.set_label("Power [dB] (normalised to max)", fontsize=12)
 
-        # 卓越周波数を白点でオーバーレイ（各迎角・表示範囲内のみ）
-        peak_aoa, peak_freq = [], []
-        for a in aoa_axis:
-            psd_mean = np.vstack([r[key][fmask] for r in by_aoa[a]]).mean(axis=0)
-            if psd_mean.size and np.any(psd_mean > 0):
-                peak_aoa.append(a)
-                peak_freq.append(f_plot[np.argmax(psd_mean)])
         ax.scatter(peak_aoa, peak_freq, s=14, facecolors="none",
                    edgecolors="white", linewidths=0.8, zorder=3,
                    label="dominant freq")
@@ -576,6 +596,63 @@ def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
         fig.savefig(os.path.join(exp_dir, fname), dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  [マップ] {fname} を保存しました")
+
+
+def plot_aoa_freq_panel(panel_data, out_dir, args):
+    """全条件を縦に並べて風速ごとの迎角×周波数マップを比較するパネル図。
+
+    Trickey et al. (2002) の流速掃引スペクトログラムに相当する俯瞰図を、
+    「風速＝条件」を行方向に積み上げて表現する（上=高速、下=低速）。
+    1枚の図に Fy（左列）・Mz（右列）を並べて出力する。
+
+    panel_data : list of (rep_U, spec_rows)
+    """
+    if not panel_data:
+        return
+
+    # 風速の高い順に上から並べる
+    panel_data = sorted(panel_data, key=lambda t: t[0], reverse=True)
+    n = len(panel_data)
+
+    fig, axes = plt.subplots(n, 2, figsize=(15, 2.6 * n + 1.2),
+                             sharex=True, squeeze=False)
+    meshes = {0: None, 1: None}
+
+    for col, (axis, key, unit) in enumerate(
+        [("Fy", "psd_Fy", "N"), ("Mz", "psd_Mz", "Nm")]
+    ):
+        for i, (rep_U, spec_rows) in enumerate(panel_data):
+            ax = axes[i, col]
+            grid = build_aoa_freq_grid(spec_rows, key, args)
+            if grid is None:
+                ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                        transform=ax.transAxes)
+            else:
+                aoa_axis, f_plot, Z_db, peak_aoa, peak_freq = grid
+                meshes[col] = ax.pcolormesh(aoa_axis, f_plot, Z_db,
+                                            shading="nearest", cmap="viridis",
+                                            vmin=-args.map_dyn_range, vmax=0.0)
+                ax.scatter(peak_aoa, peak_freq, s=8, facecolors="none",
+                           edgecolors="white", linewidths=0.6, zorder=3)
+            ax.set_ylim(0, args.map_fmax)
+            if col == 0:
+                ax.set_ylabel(f"U≈{rep_U:.1f} m/s\nFreq [Hz]", fontsize=10)
+
+        axes[0, col].set_title(f"{axis} [{unit}]", fontsize=13)
+        axes[-1, col].set_xlabel("Angle of attack [deg]", fontsize=13)
+
+    fig.suptitle("AoA-frequency map across wind speeds", fontsize=14, y=0.995)
+
+    for col in (0, 1):
+        if meshes[col] is not None:
+            cbar = fig.colorbar(meshes[col], ax=axes[:, col].tolist(),
+                                pad=0.02, aspect=40)
+            cbar.set_label("Power [dB] (normalised to max)", fontsize=10)
+
+    fname = "aoa_freq_panel.png"
+    fig.savefig(os.path.join(out_dir, fname), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[パネル] {fname} を保存しました")
 
 
 # ============================================================
@@ -702,14 +779,30 @@ def main():
     base_dir = args.base_dir.rstrip("/\\")
     base_name = os.path.basename(base_dir)   # 例: 260620_flexible
 
+    # 条件フォルダ（_cXX）が並ぶ場所を特定する。
+    #   - フラット構成: base_dir の親階層に _ofst / _cXX が並ぶ
+    #   - ネスト構成  : base_dir 直下に _ofst / _cXX が並ぶ（260624_flutter など）
+    parent = os.path.dirname(base_dir) if os.path.dirname(base_dir) else "."
+    cond_re = re.compile(rf"^{re.escape(base_name)}_c\d+$")
+
+    def list_conds(d):
+        if not os.path.isdir(d):
+            return []
+        return sorted(
+            os.path.join(d, x) for x in os.listdir(d)
+            if cond_re.match(x) and os.path.isdir(os.path.join(d, x))
+        )
+
+    cond_dirs = list_conds(base_dir) or list_conds(parent)
+    if not cond_dirs:
+        print("[エラー] 条件フォルダ（_c01 など）が見つかりません。", file=sys.stderr)
+        sys.exit(1)
+
+    # 条件フォルダが見つかった場所を基準に ofst / 結果フォルダを決める
+    search_dir = os.path.dirname(cond_dirs[0])
+
     # ofst フォルダを探す
-    ofst_dir = os.path.join(
-        os.path.dirname(base_dir),
-        f"{base_name}_ofst"
-    )
-    if not os.path.isdir(ofst_dir):
-        # base_dir の中にあるケースにも対応
-        ofst_dir = os.path.join(base_dir, f"{base_name}_ofst")
+    ofst_dir = os.path.join(search_dir, f"{base_name}_ofst")
     if not os.path.isdir(ofst_dir):
         print(f"[エラー] ofst フォルダが見つかりません。\n"
               f"  探した場所: {ofst_dir}", file=sys.stderr)
@@ -717,34 +810,25 @@ def main():
 
     ofst = load_ofst_means(ofst_dir)
 
-    # cXX フォルダを番号順に列挙
-    parent = os.path.dirname(base_dir) if os.path.dirname(base_dir) else "."
-    cond_dirs = sorted(
-        os.path.join(parent, d)
-        for d in os.listdir(parent)
-        if re.match(rf"^{re.escape(base_name)}_c\d+$", d)
-        and os.path.isdir(os.path.join(parent, d))
-    )
-
-    if not cond_dirs:
-        print(f"[エラー] 条件フォルダ（_c01 など）が見つかりません。", file=sys.stderr)
-        sys.exit(1)
-
     print(f"[一括処理] {len(cond_dirs)} 条件を処理します。")
 
-    summaries = []
+    summaries  = []
+    panel_data = []   # 全条件比較パネル用 (rep_U, spec_rows)
     for cond_dir in cond_dirs:
         log = load_log(cond_dir)
         rep_U = log.get("rep_windspeed_U", 0.0)
-        df = process_one_condition(cond_dir, ofst, args)
-        if df is not None:
+        result = process_one_condition(cond_dir, ofst, args)
+        if result is not None:
+            df, spec_rows = result
             summaries.append((rep_U, df))
+            panel_data.append((rep_U, spec_rows))
 
-    # Layer 3: マップ出力（base_dir と同じ階層に保存）
-    map_dir = os.path.join(parent, f"{base_name}_results")
+    # Layer 3: マップ出力（条件フォルダと同じ階層に保存）
+    map_dir = os.path.join(search_dir, f"{base_name}_results")
     os.makedirs(map_dir, exist_ok=True)
     plot_flutter_map(summaries, map_dir)
     plot_rms_overview(summaries, map_dir)
+    plot_aoa_freq_panel(panel_data, map_dir, args)
 
     print(f"\n[完了] 結果を保存しました: {map_dir}")
 
