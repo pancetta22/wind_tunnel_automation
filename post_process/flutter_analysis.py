@@ -121,6 +121,9 @@ def parse_args():
                    help="LCO調和・ピーク解析の下限周波数 [Hz]（デフォルト: 1）")
     p.add_argument("--lco_fmax", type=float, default=500.0,
                    help="LCO調和・ピーク解析の上限周波数 [Hz]（デフォルト: 500）")
+    p.add_argument("--lco_spec_aoa", default="",
+                   help="風速版スペクトログラムの対象迎角（カンマ区切り。"
+                        "未指定なら振幅最大の正側・負側を自動選択）")
     return p.parse_args()
 
 
@@ -632,6 +635,60 @@ def build_aoa_freq_grid(spec_rows, key, args):
     return aoa_axis, f_plot, Z_db, peak_aoa, peak_freq
 
 
+def build_speed_freq_grid(panel_data, target_aoa, key, args):
+    """指定迎角について、風速×周波数の dB グリッドを構築する（風速版スペクトログラム）。
+
+    Trickey et al. (2002) の fig.8（流速×周波数スペクトログラム）に対応。
+    build_aoa_freq_grid が迎角軸で束ねるのに対し、こちらは迎角を固定して
+    全風速条件（panel_data）を風速軸に並べる。
+
+    Parameters
+    ----------
+    panel_data : list of (rep_U, spec_rows)
+    target_aoa : int                 固定する迎角
+    key        : "psd_Fy" or "psd_Mz"
+
+    Returns
+    -------
+    u_axis, f_plot, Z_db, peak_u, peak_freq  または データが無ければ None
+    """
+    if not panel_data:
+        return None
+
+    freqs = None
+    cols = {}   # rep_U -> 平均PSD（target_aoa の重複は平均）
+    for rep_U, spec_rows in panel_data:
+        psds = [r[key] for r in spec_rows if r["aoa"] == target_aoa]
+        if not psds:
+            continue
+        if freqs is None:
+            freqs = next(r["freqs"] for r in spec_rows if r["aoa"] == target_aoa)
+        cols[rep_U] = np.vstack(psds).mean(axis=0)
+
+    if not cols or freqs is None:
+        return None
+
+    u_axis = np.array(sorted(cols.keys()))
+    fmask  = freqs <= args.map_fmax
+    f_plot = freqs[fmask]
+
+    Z = np.column_stack([cols[u][fmask] for u in u_axis])
+    zmax = Z.max()
+    if zmax <= 0:
+        return None
+    Z_db = 10.0 * np.log10(np.maximum(Z, zmax * 1e-12) / zmax)
+    Z_db = np.clip(Z_db, -args.map_dyn_range, 0.0)
+
+    peak_u, peak_freq = [], []
+    for j, u in enumerate(u_axis):
+        col = Z[:, j]
+        if np.any(col > 0):
+            peak_u.append(u)
+            peak_freq.append(f_plot[np.argmax(col)])
+
+    return u_axis, f_plot, Z_db, peak_u, peak_freq
+
+
 def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
     """1風速条件について、横軸=迎角・縦軸=周波数・濃淡=PSD[dB] のマップを描く。
 
@@ -944,10 +1001,14 @@ def main():
     plot_rms_overview_6axis(summaries, map_dir)
     plot_aoa_freq_panel(panel_data, map_dir, args)
 
-    # LCO全条件レベルの図（ステップ3以降で実装。--lco 時のみ）
+    # LCO全条件レベルの図（--lco 時のみ）
     if args.lco:
         import lco_analysis
         lco_analysis.plot_all_conditions(lco_data, map_dir, args)
+        # 風速版スペクトログラム（迎角固定で風速スイープ）は既存の PSD（panel_data）を
+        # 再利用する。build_aoa_freq_grid と同形式のグリッドを風速軸で構築する。
+        lco_analysis.plot_speed_spectrogram(
+            panel_data, map_dir, args, build_grid=build_speed_freq_grid)
 
     print(f"\n[完了] 結果を保存しました: {map_dir}")
 

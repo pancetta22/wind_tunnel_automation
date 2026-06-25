@@ -33,7 +33,7 @@
 | 全条件 | `bifurcation_Fy/Mz.png` | 分岐図 | 3（実装済） |
 | 全条件 | `freq_coalescence.png` | 周波数合流図 | 3（実装済） |
 | 全条件 | `lco_metric_map_Fy/Mz.png` | 迎角×風速のLCO指標マップ | 3（実装済） |
-| 全条件 | `spectrogram_speed_Fy/Mz.png` | 風速版スペクトログラム | 4（予定） |
+| 全条件 | `spectrogram_speed_*_aoa±NN.png` | 風速版スペクトログラム | 4（実装済） |
 
 > 全条件レベルの図（分岐図・合流図・指標マップ）は `--base_dir` で**全風速条件を一括処理**したときに
 > `<base>_results/` に出力される。`--exp_dir` で1条件だけ処理した場合は条件レベルまで。
@@ -103,8 +103,13 @@
 **2モードの周波数が風速とともに近づく（合流する）**。大きいマーカー＝明瞭なLCO（細いループ）。
 
 ### LCO指標マップ `lco_metric_map_Fy/Mz.png`（全条件）
-迎角×風速の平面に loop_thickness を色・サイズで重畳。**大きく濃いマーカー＝明瞭なLCO**。
-フラッター発生域が迎角×風速のどこに広がるかを一望できる。
+迎角×風速の平面に loop_thickness を色・サイズで重畳。**大きく黄色いマーカー＝明瞭なLCO**
+（loop_thickness 小）。フラッター発生域が迎角×風速のどこに広がるかを一望できる。
+
+### 風速版スペクトログラム `spectrogram_speed_*_aoa±NN.png`（全条件・Trickey fig.8）
+**迎角を固定**して、横軸=風速・縦軸=周波数・濃淡=PSD[dB]。フラッターが明瞭な迎角でこそ
+意味を持つため、`--lco_spec_aoa 18,-20` のように対象迎角を指定する（未指定なら振幅最大の
+正側・負側を自動選択）。風速を上げたとき卓越周波数がどう動くか（合流・分岐）を追える。
 
 ---
 
@@ -159,6 +164,7 @@ python lco_analysis.py C:/WindyData/.../20260620_..._Pdata_15.01.csv
 - `--lco_signals Fy,Mz` … 主軸信号（既定 Fy,Mz）
 - `--lco_tau_mode zero_cross|quarter_period` … 時間遅れτの決め方
 - `--lco_fmin 1 --lco_fmax 500` … 調和・ピーク解析の帯域
+- `--lco_spec_aoa 18,-20` … 風速版スペクトログラムの対象迎角（未指定なら自動選択）
 
 ---
 
@@ -172,4 +178,3 @@ python lco_analysis.py C:/WindyData/.../20260620_..._Pdata_15.01.csv
 
 ---
 
-*（風速版スペクトログラム（ステップ4）の節は実装時に追記する。）*

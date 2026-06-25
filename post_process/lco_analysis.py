@@ -576,6 +576,86 @@ def plot_all_conditions(lco_data, map_dir, args):
     plot_lco_metric_map(lco_data, map_dir, names)
 
 
+def plot_speed_spectrogram(panel_data, map_dir, args, build_grid):
+    """風速版スペクトログラム（Trickey fig.8）。迎角固定で横軸=風速・縦軸=周波数。
+
+    フラッターが明瞭な迎角でこそ周波数追跡が意味を持つため、--lco_spec_aoa で
+    迎角を指定する（カンマ区切り、複数可）。未指定なら全条件で最も振幅の大きい
+    正側・負側の迎角を1つずつ自動選択する。
+
+    build_grid : flutter_analysis.build_speed_freq_grid を渡す
+                 （PSDデータは flutter_analysis 側が持つため）
+    """
+    if not panel_data:
+        return
+
+    # 対象迎角の決定
+    spec_aoa = getattr(args, "lco_spec_aoa", "") or ""
+    if spec_aoa.strip():
+        target_aoas = []
+        for tok in spec_aoa.split(","):
+            tok = tok.strip()
+            if tok:
+                try:
+                    target_aoas.append(int(tok))
+                except ValueError:
+                    pass
+    else:
+        target_aoas = _auto_select_aoas(panel_data)
+
+    if not target_aoas:
+        return
+
+    for axis, key, unit in [("Fy", "psd_Fy", "N"), ("Mz", "psd_Mz", "Nm")]:
+        for aoa in target_aoas:
+            grid = build_grid(panel_data, aoa, key, args)
+            if grid is None:
+                continue
+            u_axis, f_plot, Z_db, peak_u, peak_freq = grid
+
+            fig, ax = plt.subplots(figsize=(10, 7))
+            mesh = ax.pcolormesh(u_axis, f_plot, Z_db, shading="nearest",
+                                 cmap="viridis", vmin=-args.map_dyn_range, vmax=0.0)
+            cbar = fig.colorbar(mesh, ax=ax)
+            cbar.set_label("Power [dB] (normalised to max)", fontsize=12)
+            ax.scatter(peak_u, peak_freq, s=20, facecolors="none",
+                       edgecolors="white", linewidths=0.9, zorder=3,
+                       label="dominant freq")
+            ax.set_xlabel("wind speed U [m/s]", fontsize=13)
+            ax.set_ylabel("Frequency [Hz]", fontsize=13)
+            ax.set_ylim(0, args.map_fmax)
+            ax.set_title(f"Speed spectrogram  {axis} [{unit}]   AoA = {aoa:+d}°",
+                         fontsize=13)
+            ax.legend(fontsize=10, loc="upper right")
+            out = os.path.join(map_dir,
+                               f"spectrogram_speed_{axis}_aoa{aoa:+03d}.png")
+            fig.savefig(out, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"[LCO] {os.path.basename(out)} を保存しました")
+
+
+def _auto_select_aoas(panel_data):
+    """全条件のPSDから、正側・負側で最も卓越パワーが大きい迎角を1つずつ選ぶ。
+
+    フラッターが明瞭（卓越ピークが強い）な迎角を風速スペクトログラムの対象にする。
+    """
+    score = {}   # aoa -> 全風速での最大PSDピークの合計
+    for _, spec_rows in panel_data:
+        for r in spec_rows:
+            p = max(float(np.max(r["psd_Mz"])), float(np.max(r["psd_Fy"])))
+            score[r["aoa"]] = score.get(r["aoa"], 0.0) + p
+    if not score:
+        return []
+    pos = [a for a in score if a > 0]
+    neg = [a for a in score if a < 0]
+    out = []
+    if pos:
+        out.append(max(pos, key=lambda a: score[a]))
+    if neg:
+        out.append(max(neg, key=lambda a: score[a]))
+    return out
+
+
 def plot_bifurcation(lco_data, map_dir, names):
     """分岐図（Trickey fig.3）。横軸=迎角、縦軸=Poincaré点の振幅。
 
