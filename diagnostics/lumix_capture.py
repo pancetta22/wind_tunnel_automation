@@ -617,7 +617,7 @@ def capture_series(out_dir: str, base_name: str, count: int) -> bool:
 # ============================================================
 #  シャッターのみ（SDカード保存 + 撮影manifest記録）
 #  ── DLNAライブ転送が使えないカメラ向け。撮影だけ行い、画像は実験後に
-#     SDカードからまとめてPCへ取り込む（post_process/photo_import.py）。
+#     SDカードを picture/photo へコピー→run_postprocess が整理＋輪郭抽出する。
 # ============================================================
 def _append_manifest(manifest_path: str, label: str, shot: int,
                      target_angle, phase, pc_time: str, shutter_ok: bool) -> None:

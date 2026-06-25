@@ -23,8 +23,7 @@
 | ファイル | 説明 |
 |---------|------|
 | `force_measurement.py` | **力の後処理 入口**。windspeed → calc_force を順に実行 |
-| `photo_import.py` | SDカードの実験写真を撮影manifestに従い `0deg1.JPG` 等へ取り込み |
-| `picture_analysis.py` | **写真の後処理 入口**。翼模型写真 → 翼型輪郭（3枚平均） |
+| `picture_analysis.py` | **写真の後処理 入口**。SD写真の整理＋翼模型写真 → 翼型輪郭（3枚平均） |
 | `make_comparison.py` | 過去剛体翼との比較パワポを生成（WindyData を走査＋同梱過去分） |
 | `make_windspeed.py` | 差圧電圧サマリー → `windspeed.csv`（force_measurement が呼ぶ） |
 | `calc_force.py` | 6軸力 → 空力係数（force_measurement が呼ぶ） |
@@ -123,28 +122,32 @@ k [Pa/mV] = U² × ρ / (2 × V)
 
 ---
 
-## 写真の取り込み（`photo_import.py`・SDカード方式）
+## 写真のSDカード方式（撮影 → コピー → 整理＋抽出を一気に）
 
 LUMIX DC-G100D はリモート操作（cam.cgi）中はDLNAで画像を配信しないため、
 実験中の**ライブ転送はできない**。そこで撮影は次の2段構えで行う：
 
-1. **実験中**：`run_experiment` がシャッターだけ切り、SDカードに保存する。
-   各ショットの撮影順・迎角ラベル・成否を `picture/photo/_shot_manifest.csv` に記録。
-2. **実験後**：SDカードの写真をPCの任意フォルダにコピーし、`photo_import.py` で
-   撮影順に `0deg1.JPG`・`p5deg1.JPG`… へリネーム取り込みする。
+1. **実験中**：`run_experiment` がシャッターだけ切り、SDカードに保存する（力計測と並行）。
+   各ショットの撮影順・迎角ラベル・成否は `picture/_shot_manifest.csv` に記録される。
+2. **実験後**：SDカードの写真を **`picture/photo/` にコピー**（実験前の余分な写真が
+   混ざっていてもよい）→ `run_postprocess` を実行するだけ。
+
+`run_postprocess`（内部で `picture_analysis.py`）が以下を**一気に**行う：
+
+- **整理**：撮影記録に従い、実験写真（撮影順で最新 N 枚）だけを残して
+  `0deg1.JPG`・`p5deg1.JPG`… にリネーム。実験以外の古い写真は**削除**。
+- **抽出**：各迎角3枚の輪郭を平均して `picture/` 配下に出力。
 
 ```bat
-:: まず割り当てを確認（--dry-run）→ よければ外して実行
-post_process\venv\Scripts\python <repo>\post_process\photo_import.py ^
-    --sd "<SDからコピーした写真フォルダ>" ^
-    --manifest "<実験フォルダ>\picture\photo\_shot_manifest.csv" ^
-    --out "<実験フォルダ>\picture\photo" --dry-run
+:: run_postprocess から自動で呼ばれる。単体実行する場合:
+post_process\venv\Scripts\python <repo>\post_process\picture_analysis.py ^
+    --photo_dir "<実験フォルダ>\picture\photo" ^
+    --out       "<実験フォルダ>\picture" ^
+    --manifest  "<実験フォルダ>\picture\_shot_manifest.csv"
 ```
 
-対応づけは「manifest の成功ショットを撮影順に」「SDのJPEGをファイル名順（=撮影順）に」
-並べ、**最新 N 枚**を実験写真として先頭から割り当てる（SDに過去写真が残っていてもよい）。
-取り込み後は下記の `picture_analysis.py` に進める。`run_postprocess` は写真が未取り込み
-（manifestだけ存在）の場合に上記コマンドを案内する。
+整理は冪等で、既に `0deg1.JPG` 等へ整理済みなら再実行しても何もしない
+（カメラ連番名のファイルがある時だけ整理する）。
 
 ---
 

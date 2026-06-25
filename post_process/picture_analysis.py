@@ -123,6 +123,83 @@ def aoa_from_label(label: str) -> float:
 
 
 # ============================================================
+#  SDコピー写真の整理（撮影manifestに従ってリネーム＋不要削除）
+# ============================================================
+def load_manifest_labels(manifest_path: str) -> list:
+    """撮影manifestの成功ショット(shutter_ok=1)のラベルを撮影順(seq昇順)で返す。"""
+    import csv
+    rows = []
+    try:
+        with open(manifest_path, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                if str(r.get("shutter_ok", "")).strip() != "1":
+                    continue
+                label = (r.get("label") or "").strip().lower()
+                if not label:
+                    continue
+                try:
+                    seq = int(r.get("seq", ""))
+                except (TypeError, ValueError):
+                    seq = len(rows) + 1
+                rows.append((seq, label))
+    except OSError:
+        return []
+    rows.sort(key=lambda x: x[0])
+    return [lbl for _s, lbl in rows]
+
+
+def organize_photos(photo_dir: str, manifest_path: str) -> None:
+    """SDからコピーした写真(カメラ連番名)を撮影manifestに従って整理する：
+      ・実験写真（撮影順で最新 N 枚）だけを残し、それ以前の余分な写真は削除
+      ・残した写真を撮影順に <label><shot>.JPG へリネーム
+    既に <label><shot>.JPG 形式（カメラ連番名が無い）なら何もしない（再実行時）。"""
+    jpgs = [f for f in os.listdir(photo_dir)
+            if f.lower().endswith((".jpg", ".jpeg"))]
+    camera = [f for f in jpgs if parse_photo_name(f) is None]   # 連番名(P1000xxx等)
+    if not camera:
+        return   # ラベル名のみ＝整理済み、または写真なし
+    if not os.path.isfile(manifest_path):
+        print(f"[整理] 撮影manifestが無いため写真整理をスキップ: {manifest_path}",
+              file=sys.stderr)
+        return
+    labels = load_manifest_labels(manifest_path)
+    if not labels:
+        print("[整理] manifestに成功ショットがありません。整理をスキップ。", file=sys.stderr)
+        return
+
+    camera.sort(key=str.lower)   # ファイル名順 = 撮影順
+    n = len(labels)
+    if len(camera) < n:
+        print(f"[整理][警告] 写真 {len(camera)}枚 < 撮影記録 {n}枚。"
+              "古い順に分かるところまで割当（不足分はスキップ）。", file=sys.stderr)
+        keep, extra = camera, []
+        labels = labels[:len(camera)]
+    else:
+        extra = camera[:len(camera) - n]   # 古い余分 → 削除
+        keep = camera[len(camera) - n:]    # 最新 N 枚 = 実験写真
+        if extra:
+            print(f"[整理] 実験以外の古い写真 {len(extra)}枚を削除します。")
+
+    for fn in extra:
+        try:
+            os.remove(os.path.join(photo_dir, fn))
+            print(f"[整理] 削除: {fn}")
+        except OSError as e:
+            print(f"[整理][警告] 削除失敗 {fn}: {e}", file=sys.stderr)
+
+    counter: dict = {}
+    for src, label in zip(keep, labels):
+        counter[label] = counter.get(label, 0) + 1
+        dst = f"{label}{counter[label]}.JPG"
+        try:
+            os.replace(os.path.join(photo_dir, src), os.path.join(photo_dir, dst))
+            print(f"[整理] {src} -> {dst}")
+        except OSError as e:
+            print(f"[整理][警告] リネーム失敗 {src}: {e}", file=sys.stderr)
+    print(f"[整理] 完了: {len(keep)}枚を実験写真として整理しました。\n")
+
+
+# ============================================================
 #  画像処理（従来 extract_airfoil4.py の輪郭抽出を移植）
 # ============================================================
 def detect_green_markers(img, hsv) -> np.ndarray | None:
@@ -439,6 +516,8 @@ def main() -> int:
                         help="出力フォルダ（既定: ./airfoil）")
     parser.add_argument("--rotate-offset", type=float, default=ROTATE_OFFSET_DEG,
                         help=f"迎角への回転補正[deg]（既定 {ROTATE_OFFSET_DEG}）")
+    parser.add_argument("--manifest", default=None,
+                        help="撮影manifestのパス（既定: <out>/_shot_manifest.csv）")
     args = parser.parse_args()
 
     exp_dir = os.getcwd()
@@ -455,6 +534,11 @@ def main() -> int:
     if not os.path.isdir(photo_dir):
         print(f"[エラー] 写真フォルダがありません: {photo_dir}", file=sys.stderr)
         return 1
+
+    # SDからコピーした写真（カメラ連番名・実験前の余分が混在）を、撮影manifestに
+    # 従って整理する：実験写真だけ残して <label><shot>.JPG にリネーム、余分は削除。
+    manifest_path = args.manifest or os.path.join(out_dir, "_shot_manifest.csv")
+    organize_photos(photo_dir, manifest_path)
 
     # photo/ を迎角ラベルごとにまとめる
     groups: dict[str, list] = {}

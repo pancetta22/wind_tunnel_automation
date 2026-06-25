@@ -211,23 +211,23 @@ end
 
 
 function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
-    % picture/photo に写真があれば、翼型輪郭を抽出するか y/n で確認して実行する。
-    %  各迎角3枚の写真から輪郭を抽出・平均し、picture/ 配下に出力する。
+    % picture/photo に写真があれば、y/n 確認のうえ「整理＋翼型輪郭抽出」を一気に行う。
+    %  整理: SDからコピーした写真を撮影記録(picture/_shot_manifest.csv)に従い
+    %        実験写真だけ残して 0deg1.JPG 等にリネーム、実験以外の古い写真は削除。
+    %  抽出: 各迎角3枚の輪郭を平均して picture/ 配下に出力。
     if ~isfolder(photo_dir)
         return   % 写真を撮っていない実験 → 何もしない
     end
-    imgs = [dir(fullfile(photo_dir, '*.JPG')); dir(fullfile(photo_dir, '*.jpg'))];
-    manifest = fullfile(photo_dir, '_shot_manifest.csv');
+    picture_dir = fileparts(photo_dir);   % picture/photo の親 = picture/
+    manifest = fullfile(picture_dir, '_shot_manifest.csv');
+    imgs = [dir(fullfile(photo_dir, '*.JPG')); dir(fullfile(photo_dir, '*.jpg')); ...
+            dir(fullfile(photo_dir, '*.jpeg'))];
     if isempty(imgs)
         if isfile(manifest)
-            % 撮影記録だけある＝SDからの取り込み未実施。手順を案内する。
-            import_script = fullfile(fileparts(pic_script), 'photo_import.py');
-            fprintf('[写真] SDカードからの取り込みがまだです（撮影記録のみ存在）。\n');
-            fprintf('  1) カメラのSDカードの写真をPCの任意フォルダにコピー\n');
-            fprintf('  2) 次を実行して撮影順に迎角ラベル名へ取り込み（まず --dry-run で確認推奨）:\n');
-            fprintf('     "%s" "%s" --sd "<SD写真フォルダ>" --manifest "%s" --out "%s"\n', ...
-                venv_python, import_script, manifest, photo_dir);
-            fprintf('  3) その後 run_postprocess を再実行すると輪郭抽出に進めます。\n\n');
+            % 撮影記録はあるが写真未コピー → SDからのコピーを案内する。
+            fprintf('[写真] 撮影記録はありますが picture/photo に写真がありません。\n');
+            fprintf('  カメラのSDカードの写真を次へコピーしてください:\n    %s\n', photo_dir);
+            fprintf('  その後 run_postprocess を再実行すると、整理＋輪郭抽出まで行います。\n\n');
         end
         return
     end
@@ -236,12 +236,12 @@ function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
         return
     end
 
-    picture_dir = fileparts(photo_dir);   % picture/photo の親 = picture/
-    fprintf('[輪郭抽出] picture/photo に写真が %d 枚あります。\n', numel(imgs));
-    ans_ex = strtrim(input('翼型輪郭も抽出しますか？（緑マーカー→射影→赤エッジ→正規化） [y/n]: ', 's'));
+    fprintf('[写真] picture/photo に写真が %d 枚あります。\n', numel(imgs));
+    fprintf('  実行すると、撮影記録に従って実験写真だけ残して 0deg1.JPG 等にリネームし、\n');
+    fprintf('  実験以外の古い写真は削除した上で、各迎角3枚平均の翼型輪郭を抽出します。\n');
+    ans_ex = strtrim(input('写真の整理＋翼型輪郭抽出を行いますか？ [y/n]: ', 's'));
     if ~any(strcmpi(ans_ex, {'y', 'yes'}))
-        fprintf('  → 抽出しませんでした（後で実行: python picture_analysis.py --photo_dir "%s" --out "%s"）\n\n', ...
-                photo_dir, picture_dir);
+        fprintf('  → 行いませんでした。\n\n');
         return
     end
 
@@ -254,9 +254,9 @@ function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
         if ~isempty(strtrim(out_pip)), fprintf('%s\n', out_pip); end
     end
 
-    fprintf('[輪郭抽出] 翼型輪郭を抽出中...\n');
-    [st_ex, out_ex] = system(sprintf('"%s" "%s" --photo_dir "%s" --out "%s"', ...
-        venv_python, pic_script, photo_dir, picture_dir));
+    fprintf('[輪郭抽出] 写真を整理して翼型輪郭を抽出中...\n');
+    [st_ex, out_ex] = system(sprintf('"%s" "%s" --photo_dir "%s" --out "%s" --manifest "%s"', ...
+        venv_python, pic_script, photo_dir, picture_dir, manifest));
     if ~isempty(strtrim(out_ex)), fprintf('%s\n', out_ex); end
     if st_ex == 0
         fprintf('[輪郭抽出完了] %s に保存しました。\n\n', picture_dir);

@@ -270,7 +270,7 @@ while ph_idx <= n_phases
             %  下の j でステージ移動前に行う。撮影失敗は計測を止めない。
             if take_photos && is_wind_phase_(phase) && (pt.suffix == 1 || idx == 1)
                 cap_label    = angle_label_(pt.target_angle);
-                cap_manifest = fullfile(photo_dir, '_shot_manifest.csv');
+                cap_manifest = fullfile(fileparts(photo_dir), '_shot_manifest.csv');
                 cap_shots_reported = announce_new_shots_(cap_manifest, inf);  % 既存行数に同期(印字なし)
                 cap_proc  = start_capture_async_(cfg.python_exe, photo_script, ...
                     photo_dir, cap_label, 3, pt.target_angle, phase);
@@ -1066,16 +1066,17 @@ function [take_photos, photo_dir] = setup_photos_(picture_dir)
     take_photos = any(strcmpi(ans_p, {'y', 'yes'}));
     photo_dir = '';
     if take_photos
+        [~, ~] = mkdir(picture_dir);
         photo_dir = fullfile(picture_dir, 'photo');
-        [~, ~] = mkdir(photo_dir);
-        % 撮影中はシャッターのみ（DLNAライブ転送は使わない）。各ショットを
-        % _shot_manifest.csv に記録し、実験後にSDから photo_import.py で取り込む。
-        manifest = fullfile(photo_dir, '_shot_manifest.csv');
+        [~, ~] = mkdir(photo_dir);   % 実験後にSDカードの写真をコピーする先
+        % 撮影中はシャッターのみ（DLNAライブ転送は使わない）。撮影記録とログは
+        % picture/ 直下に置く（photo/ はSDから移した写真だけにするため）。
+        manifest = fullfile(picture_dir, '_shot_manifest.csv');
         if isfile(manifest), delete(manifest); end   % 古い記録は消して撮り直す
-        capture_log = fullfile(photo_dir, '_capture.log');
+        capture_log = fullfile(picture_dir, '_capture.log');
         if isfile(capture_log), delete(capture_log); end
         fprintf('→ 撮影します。各迎角で3枚ずつシャッターを切り、SDカードに保存します（力計測と並行）。\n');
-        fprintf('  （実験後にSDからPCへ取り込み: post_process/photo_import.py）\n');
+        fprintf('  （実験後、SDの写真を picture/photo にコピー → run_postprocess で整理・解析）\n');
         fprintf('[準備] 写真フォルダ : %s\n', photo_dir);
         fprintf('[準備] 撮影記録     : %s\n\n', manifest);
     else
@@ -1130,13 +1131,14 @@ end
 function proc = start_capture_async_(python_exe, photo_script, photo_dir, label, count, angle, phase)
     % 力計測と並行してカメラ撮影を非同期起動する（java.lang.ProcessBuilder）。
     %  迎角を保持している計測中にバックグラウンドでシャッターを切り、SDに保存する。
-    %  各ショットは photo_dir/_shot_manifest.csv に記録。子プロセスの出力は
-    %  photo_dir/_capture.log に書き出す（パイプ詰まり防止＋後で確認用。最新の点で上書き）。
+    %  各ショットは picture/_shot_manifest.csv に記録。子プロセスの出力は
+    %  picture/_capture.log に書き出す（パイプ詰まり防止＋後で確認用。最新の点で上書き）。
     %  起動できなければ [] を返す（撮影は補助なので計測は止めない）。
     %  ※ ProcessBuilder は引数を個別に渡すため、パスに空白があっても安全。
     proc = [];
-    manifest = fullfile(photo_dir, '_shot_manifest.csv');
-    logfile  = fullfile(photo_dir, '_capture.log');
+    picture_dir = fileparts(photo_dir);   % photo/ の親 = picture/
+    manifest = fullfile(picture_dir, '_shot_manifest.csv');
+    logfile  = fullfile(picture_dir, '_capture.log');
     try
         % 引数は java.lang.String[] を明示的に作って渡す。
         %  ・cellstr/char を ArrayList.add(Object) に渡すと char[] 扱いになり、
@@ -1272,10 +1274,11 @@ function clear_experiment_data_(exp_dir, photo_dir)
     % 力の解析結果（再計算で作り直されるが、古い結果が紛れないよう消す）
     n = n + delete_files_in_(fullfile(exp_dir, 'force', 'analysis'), ...
                              {'*.csv', '*.png', '*.json'});
-    % 写真の撮影記録（撮り直しで前回分が混ざらないように）
+    % 写真の撮影記録（撮り直しで前回分が混ざらないように）。picture/ 直下に置く。
     if nargin >= 2 && ~isempty(photo_dir)
+        picture_dir = fileparts(photo_dir);   % photo/ の親 = picture/
         for f = {'_shot_manifest.csv', '_capture.log'}
-            p = fullfile(photo_dir, f{1});
+            p = fullfile(picture_dir, f{1});
             if isfile(p)
                 try; delete(p); n = n + 1; catch; end
             end
