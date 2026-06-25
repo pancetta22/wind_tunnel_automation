@@ -1126,15 +1126,19 @@ function proc = start_capture_async_(python_exe, photo_script, photo_dir, label,
     manifest = fullfile(photo_dir, '_shot_manifest.csv');
     logfile  = fullfile(photo_dir, '_capture.log');
     try
+        % MATLAB char を ArrayList.add(Object) にそのまま渡すと char[] になり、
+        % ProcessBuilder.start() の toArray(String[]) で ArrayStoreException になる。
+        % 各要素を java.lang.String に明示変換して回避する。
+        S = @(x) java.lang.String(x);
         cmd = java.util.ArrayList();
-        cmd.add(python_exe);
-        cmd.add(photo_script);
-        cmd.add('--shutter-only');
-        cmd.add('--name');     cmd.add(label);
-        cmd.add('--count');    cmd.add(num2str(count));
-        cmd.add('--manifest'); cmd.add(manifest);
-        cmd.add(['--angle=' num2str(angle)]);   % 負角(-5等)を1トークンで渡す（argparse対策）
-        cmd.add('--phase');    cmd.add(phase);
+        cmd.add(S(python_exe));
+        cmd.add(S(photo_script));
+        cmd.add(S('--shutter-only'));
+        cmd.add(S('--name'));     cmd.add(S(label));
+        cmd.add(S('--count'));    cmd.add(S(num2str(count)));
+        cmd.add(S('--manifest')); cmd.add(S(manifest));
+        cmd.add(S(['--angle=' num2str(angle)]));   % 負角(-5等)を1トークンで渡す（argparse対策）
+        cmd.add(S('--phase'));    cmd.add(S(phase));
         pb = java.lang.ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(java.io.File(logfile));   % File オーバーロード（入れ子クラス未使用）
