@@ -3,7 +3,11 @@ function run_postprocess(exp_dir, cfg)
 %  後処理（windspeed → 空力係数・グラフ → 過去データ比較）だけを実行する。
 %
 %  使い方（後処理だけやり直したい時・過去実験を再処理したい時）:
-%      run_postprocess('C:\Users\...\WindyData\260615_rigid')
+%      run_postprocess                                  % 実験フォルダ名を対話入力
+%      run_postprocess('C:\Users\...\WindyData\260615_rigid')  % パス直接指定
+%
+%   ・引数なしで実行すると output_dir 内の実験フォルダ一覧を出して名前入力を促す
+%   ・force_measurement が処理済みでも安全に再実行できる（生データから作り直す）
 %
 %   - 気温・気圧・校正値は実験フォルダ直下の experiment_log.json から自動で読む
 %   - post_process/venv が無い・壊れている場合は自動で作成・修復する
@@ -14,14 +18,8 @@ function run_postprocess(exp_dir, cfg)
 
 root = fileparts(mfilename('fullpath'));
 
-% --- 引数・設定 ---------------------------------------------------------
-if nargin < 1 || isempty(exp_dir)
-    error('使い方: run_postprocess(''実験フォルダのパス'')\n  例: run_postprocess(''C:\\...\\WindyData\\260615_rigid'')');
-end
-if ~isfolder(exp_dir)
-    error('実験フォルダが見つかりません: %s', exp_dir);
-end
-if nargin < 2
+% --- 設定（先に読む：実験フォルダ名の入力で output_dir を使うため）-------
+if nargin < 2 || isempty(cfg)
     config_path = fullfile(root, 'config.json');
     if ~isfile(config_path)
         error('config.json が見つかりません: %s', config_path);
@@ -30,6 +28,14 @@ if nargin < 2
 end
 if ~isfield(cfg, 'python_exe_64'), cfg.python_exe_64 = ''; end
 if ~isfield(cfg, 'python_exe'),    cfg.python_exe    = ''; end
+
+% --- 実験フォルダ：引数が無ければ名前を入力してもらう（output_dir 配下）---
+if nargin < 1 || isempty(exp_dir)
+    exp_dir = ask_experiment_folder_(cfg);
+end
+if ~isfolder(exp_dir)
+    error('実験フォルダが見つかりません: %s', exp_dir);
+end
 
 % --- 解析結果・比較・写真の各フォルダ（新構成 force/・picture/ / 旧フラット）---
 [analysis_dir, comparison_dir, photo_dir] = resolve_layout_(exp_dir);
@@ -189,6 +195,56 @@ function txt = read_text_utf8_(path)
     end
     txt = fread(fid, [1, Inf], '*char');
     fclose(fid);
+end
+
+
+function exp_dir = ask_experiment_folder_(cfg)
+    % 後処理する実験フォルダを対話的に決める。
+    %  ・output_dir 配下の実験フォルダ一覧を表示
+    %  ・フォルダ名（output_dir 配下）またはフルパスを入力で受け付ける
+    out_dir = '';
+    if isfield(cfg, 'output_dir') && ~isempty(cfg.output_dir)
+        out_dir = cfg.output_dir;
+    end
+
+    fprintf('=== 後処理する実験フォルダの指定 ===\n');
+    if ~isempty(out_dir) && isfolder(out_dir)
+        d = dir(out_dir);
+        names = {d([d.isdir] & ~startsWith({d.name}, '.')).name};
+        if ~isempty(names)
+            fprintf('  %s 内の実験フォルダ:\n', out_dir);
+            for i = 1:numel(names)
+                fprintf('    - %s\n', names{i});
+            end
+        else
+            fprintf('  （%s に実験フォルダが見つかりません）\n', out_dir);
+        end
+    else
+        fprintf('  （config.json の output_dir が未設定/不明のため、フルパスで指定してください）\n');
+    end
+
+    while true
+        name = strtrim(input('実験フォルダ名を入力してください（フルパスも可）: ', 's'));
+        if isempty(name)
+            fprintf('  ※ フォルダ名を入力してください。\n');
+            continue;
+        end
+        if isfolder(name)                       % フルパス指定
+            exp_dir = name;
+            return;
+        end
+        if ~isempty(out_dir)                     % output_dir 配下の名前指定
+            cand = fullfile(out_dir, name);
+            if isfolder(cand)
+                exp_dir = cand;
+                return;
+            end
+        end
+        fprintf('  ※ 見つかりません: %s\n', name);
+        if ~isempty(out_dir)
+            fprintf('     （%s 配下の名前か、フルパスで指定してください）\n', out_dir);
+        end
+    end
 end
 
 
