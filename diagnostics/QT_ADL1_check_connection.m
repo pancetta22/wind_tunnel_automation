@@ -56,13 +56,39 @@ end
 fprintf('=== Step 3: Q:A0 送信 → レスポンス受信 ===\n');
 try
     writeline(s, 'Q:A0');
-    resp = strtrim(readline(s));
-    fprintf('  受信データ (raw): "%s"\n\n', resp);
 catch ME
-    fprintf('  NG: 送受信に失敗しました\n');
+    fprintf('  NG: 送信に失敗しました\n');
     fprintf('  エラー: %s\n', ME.message);
     delete(s);
     return;
+end
+
+% readline はタイムアウト時に例外を投げず警告＋空文字列を返す仕様のため、
+% 受信バイト数を直接確認して「無応答」と「化けた応答」を切り分ける。
+[~, lastWarnId] = lastwarn('');  %#ok<ASGLU>
+warning('off', 'serialport:serialport:ReadlineWarning');
+resp = readline(s);
+warnState = warning('query', 'serialport:serialport:ReadlineWarning');
+warning(warnState.state, 'serialport:serialport:ReadlineWarning');
+
+nBytesLeft = s.NumBytesAvailable;
+fprintf('  受信バイト数(未読み取り含む): %d\n', strlength(resp) + nBytesLeft);
+
+if strlength(resp) == 0 && nBytesLeft == 0
+    fprintf('  NG: 1バイトも受信できませんでした（完全な無応答）\n');
+    fprintf('  → ケーブルの結線（ストレート/クロス）、COMポート番号、配線の緩みを確認してください\n');
+    delete(s);
+    return;
+elseif strlength(resp) == 0 && nBytesLeft > 0
+    % ターミネータ(CR/LF)を受信できずバッファに残っている＝文字化けの可能性
+    raw = read(s, nBytesLeft, 'uint8');
+    fprintf('  NG: ターミネータ未検出。バッファ残データ(hex): %s\n', sprintf('%02X ', raw));
+    fprintf('  → 一部バイトは届いているが正しく終端されていません。ノイズ/誤結線の可能性があります\n');
+    delete(s);
+    return;
+else
+    resp = strtrim(resp);
+    fprintf('  受信データ (raw): "%s"\n\n', resp);
 end
 
 %% ---- Step 4: レスポンスを解析して表示 ----
