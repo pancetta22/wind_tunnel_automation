@@ -233,6 +233,8 @@ while ph_idx <= n_phases
 
         try
             cap_proc = [];   % 非同期撮影プロセスのハンドル（撮影点でのみ設定）
+            cap_manifest = '';            % 撮影記録CSVのパス（撮影点で設定）
+            cap_shots_reported = 0;       % 端末に表示済みの撮影枚数
 
             % ------ a. 迎角ステージ移動 ------
             fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
@@ -267,7 +269,9 @@ while ph_idx <= n_phases
             %  カメラ=Wi-Fi／力センサ=USB／デジボル=シリアルで経路が独立。完了待ち(join)は
             %  下の j でステージ移動前に行う。撮影失敗は計測を止めない。
             if take_photos && is_wind_phase_(phase) && (pt.suffix == 1 || idx == 1)
-                cap_label = angle_label_(pt.target_angle);
+                cap_label    = angle_label_(pt.target_angle);
+                cap_manifest = fullfile(photo_dir, '_shot_manifest.csv');
+                cap_shots_reported = announce_new_shots_(cap_manifest, inf);  % 既存行数に同期(印字なし)
                 cap_proc  = start_capture_async_(cfg.python_exe, photo_script, ...
                     photo_dir, cap_label, 3, pt.target_angle, phase);
             end
@@ -302,6 +306,10 @@ while ph_idx <= n_phases
                         prog = struct('idx', idx, 'total', n_total, ...
                                       'size_kb', sz_kb, 'limit_kb', cfg.force_sensor_size_limit_kb);
                         monitor.update(pt.target_angle, v_mv, prog);
+                    end
+                    % 並行撮影が走っていれば、撮れた枚数をリアルタイムに端末へ表示
+                    if ~isempty(cap_proc)
+                        cap_shots_reported = announce_new_shots_(cap_manifest, cap_shots_reported);
                     end
                     pause(0.1);   % A/D サイクル待ち（~10 サンプル/秒にレート制限）
                 catch ME_volt
@@ -361,7 +369,9 @@ while ph_idx <= n_phases
             % ------ j. 並行撮影の完了待ち（d2で起動したぶんをステージ移動前にjoin）------
             %  タイムアウト付き。カメラがハングしても力計測（本命）は止めない。
             if ~isempty(cap_proc)
+                cap_shots_reported = announce_new_shots_(cap_manifest, cap_shots_reported);
                 wait_capture_async_(cap_proc, cap_label, 15);
+                cap_shots_reported = announce_new_shots_(cap_manifest, cap_shots_reported);
                 cap_proc = [];
             end
 
@@ -1150,6 +1160,40 @@ function proc = start_capture_async_(python_exe, photo_script, photo_dir, label,
         fprintf('[撮影][警告] 撮影プロセスを起動できませんでした: %s\n', ME.message);
         proc = [];
     end
+end
+
+function n_reported = announce_new_shots_(manifest, n_reported)
+    % manifest に新しく記録された撮影を端末に出す（撮れているか即わかるように）。
+    %  _append_manifest は1ショットごとに追記してクローズするため読み取り競合しにくい。
+    %  n_reported に inf を渡すと「印字せず現在の記録数だけ返す」（撮影開始時の同期用）。
+    if isempty(manifest) || ~isfile(manifest)
+        if isinf(n_reported), n_reported = 0; end
+        return;
+    end
+    fid = fopen(manifest, 'r');
+    if fid < 0, return; end
+    rows = {};
+    fgetl(fid);   % ヘッダを読み飛ばす
+    while true
+        line = fgetl(fid);
+        if ~ischar(line), break; end
+        if ~isempty(strtrim(line)), rows{end+1} = line; end %#ok<AGROW>
+    end
+    fclose(fid);
+    if ~isinf(n_reported)
+        for i = n_reported+1 : numel(rows)
+            parts = strsplit(rows{i}, ',', 'CollapseDelimiters', false);
+            if numel(parts) >= 7
+                if strcmp(strtrim(parts{7}), '1')
+                    status = 'OK（SDに保存）';
+                else
+                    status = '失敗（記録のみ）';
+                end
+                fprintf('\n  [撮影中] %s %s枚目 ... %s\n', parts{2}, parts{3}, status);
+            end
+        end
+    end
+    n_reported = numel(rows);
 end
 
 function wait_capture_async_(proc, label, timeout_sec)
