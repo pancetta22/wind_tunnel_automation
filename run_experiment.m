@@ -477,11 +477,13 @@ switch exp_control
         continue;           % 外側リスタートループの先頭へ
 
     case 'restart_full'      % 完全に最初から（気温・気圧から）
+        clear_experiment_data_(exp_dir, photo_dir);   % 構成変更(P+M→P等)で残る旧データを一掃
         need_met = true;  preset_start = 0;
         fprintf('[再起動] 完全に最初からやり直します。\n\n');
         continue;
 
     case 'restart_after_met' % 気温・気圧の後から（迎角範囲・開始フェーズの選択から）
+        clear_experiment_data_(exp_dir, photo_dir);   % 構成変更(P+M→P等)で残る旧データを一掃
         need_met = false; preset_start = 0;
         fprintf('[再起動] 迎角範囲・開始フェーズの選択からやり直します。\n\n');
         continue;
@@ -1213,6 +1215,48 @@ function delete_phase_data_(data_dir, phase)
     end
     if n > 0
         fprintf('[削除] %s フェーズの古いデータ %d ファイルを削除しました。\n\n', phase, n);
+    end
+end
+
+function clear_experiment_data_(exp_dir, photo_dir)
+    % 「最初からやり直す」時に、この実験フォルダの計測データを一掃する。
+    % P+M で計測後に P のみでやり直す等、構成変更で計測しないフェーズの旧データ
+    % （例: Mofst / Mdata）が残ると後処理が汚染されるため、フェーズ単位ではなく全消し。
+    % ※ 気象条件の experiment_log.json（実験フォルダ直下）は消さない。
+    n = 0;
+    % 力の生データ（force/data の全CSV: 6軸・volt_raw・volt_summary）
+    n = n + delete_files_in_(fullfile(exp_dir, 'force', 'data'), {'*.csv'});
+    % 力の解析結果（再計算で作り直されるが、古い結果が紛れないよう消す）
+    n = n + delete_files_in_(fullfile(exp_dir, 'force', 'analysis'), ...
+                             {'*.csv', '*.png', '*.json'});
+    % 写真の撮影記録（撮り直しで前回分が混ざらないように）
+    if nargin >= 2 && ~isempty(photo_dir)
+        for f = {'_shot_manifest.csv', '_capture.log'}
+            p = fullfile(photo_dir, f{1});
+            if isfile(p)
+                try; delete(p); n = n + 1; catch; end
+            end
+        end
+    end
+    fprintf('[初期化] この実験フォルダの計測データを %d ファイル削除しました。\n\n', n);
+end
+
+function n = delete_files_in_(folder, patterns)
+    % folder 内で patterns に一致するファイルを削除し、削除数を返す。
+    n = 0;
+    if ~isfolder(folder), return; end
+    for k = 1:numel(patterns)
+        files = dir(fullfile(folder, patterns{k}));
+        for i = 1:numel(files)
+            if ~files(i).isdir
+                try
+                    delete(fullfile(files(i).folder, files(i).name));
+                    n = n + 1;
+                catch
+                    fprintf('[警告] 削除できませんでした: %s\n', files(i).name);
+                end
+            end
+        end
     end
 end
 
