@@ -487,15 +487,78 @@ def analyze_point(t, sigs, aoa, short, fig_dir, args):
         for k, v in m.items():
             metrics[f"{k}_{name}"] = v
         chart_sigs[name] = (x, m, art)
-        # 全条件レベル図用の生成物（Poincaré点群・卓越周波数）を退避
+        # 条件・全条件レベル図用の生成物を退避（メモリ節約のため埋め込みは間引く）
         row[f"poincare_{name}"] = art["poincare"]
         row[f"f0_{name}"] = art["f0"]
+        row[f"emb_{name}"] = _decimate_emb(art["emb"])
+        row[f"loop_thickness_{name}"] = m["loop_thickness"]
+        row[f"harmonic_ratio_{name}"] = m["harmonic_ratio"]
+        row[f"spectral_flatness_{name}"] = m["spectral_flatness"]
 
     if chart_sigs:
         plot_chart(fig_dir, short, t, chart_sigs, fs=FS_TARGET,
                    aoa=aoa, fmax_disp=fmax_disp)
 
     return {"metrics": metrics, "row": row}
+
+
+def _decimate_emb(emb, max_points=4000):
+    """位相図の俯瞰グリッド用に埋め込み座標を間引く（メモリ・描画コスト削減）。"""
+    if emb is None:
+        return None
+    if emb.shape[0] <= max_points:
+        return emb
+    step = int(np.ceil(emb.shape[0] / max_points))
+    return emb[::step]
+
+
+def plot_phase_sweep(lco_rows, exp_dir, rep_U, args):
+    """迎角に沿って位相図を並べたグリッド図を出力する（条件レベル）。
+
+    Trickey et al. (2002) の応答変化の俯瞰に相当。迎角が増えるにつれ
+    細い閉ループ（periodic LCO）⇔ 太い雲（乱流的）がどう移り変わるかを
+    1枚で見渡せる。Fy・Mz それぞれ1枚出力する。
+
+    lco_rows : list of row dict（analyze_point の戻り値 "row"）
+    """
+    if not lco_rows:
+        return
+    names = [s.strip() for s in args.lco_signals.split(",") if s.strip()]
+    # 迎角昇順（重複迎角は Pdata/Mdata 別個に残す＝そのまま並べる）
+    rows = sorted(lco_rows, key=lambda r: r["aoa"])
+
+    for name in names:
+        emb_key = f"emb_{name}"
+        cells = [r for r in rows if r.get(emb_key) is not None]
+        if not cells:
+            continue
+
+        n = len(cells)
+        ncol = min(8, max(4, int(np.ceil(np.sqrt(n)))))
+        nrow = int(np.ceil(n / ncol))
+        fig, axes = plt.subplots(nrow, ncol,
+                                 figsize=(2.0 * ncol, 2.0 * nrow),
+                                 squeeze=False)
+        fig.suptitle(f"Phase sweep  {name}   U ≈ {rep_U:.2f} m/s", fontsize=13)
+
+        for k, r in enumerate(cells):
+            ax = axes[k // ncol][k % ncol]
+            emb = r[emb_key]
+            ax.plot(emb[:, 0], emb[:, 1], lw=0.3, color="darkorange", alpha=0.8)
+            thick = r.get(f"loop_thickness_{name}", np.nan)
+            ax.set_title(f"{r['aoa']:+d}°  (thk={thick:.2f})", fontsize=8)
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_aspect("equal", adjustable="datalim")
+
+        # 余ったセルは消す
+        for k in range(n, nrow * ncol):
+            axes[k // ncol][k % ncol].axis("off")
+
+        fig.tight_layout(rect=[0, 0, 1, 0.97])
+        out = os.path.join(exp_dir, f"phase_sweep_{name}.png")
+        fig.savefig(out, dpi=130, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  [LCO] phase_sweep_{name}.png を保存しました")
 
 
 def plot_all_conditions(lco_data, map_dir, args):

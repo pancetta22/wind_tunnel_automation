@@ -570,6 +570,10 @@ def process_one_condition(exp_dir, ofst, args):
     if spec_rows:
         plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args)
 
+    # LCO: 迎角に沿った位相図スイープ（--lco 時のみ）
+    if args.lco and lco_rows:
+        lco_analysis.plot_phase_sweep(lco_rows, exp_dir, rep_U, args)
+
     return df, spec_rows, lco_rows
 
 
