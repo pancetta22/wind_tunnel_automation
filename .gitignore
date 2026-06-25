@@ -16,6 +16,12 @@ CLAUDE.md
 .venv/
 venv/
 ENV/
+__pycache__/
+*.pyc
+
+# post_process の一時ログ・デバッグ出力
+post_process/_lco_*.log
+post_process/_lco_*.txt
 
 # Camera test output (lumix_test.py の撮影テスト保存先・リポジトリには入れない)
 diagnostics/lumix_test_out/
