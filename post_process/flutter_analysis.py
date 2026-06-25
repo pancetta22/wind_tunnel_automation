@@ -108,6 +108,19 @@ def parse_args():
                    help="迎角×周波数マップの周波数表示上限 [Hz]（デフォルト: 50）")
     p.add_argument("--map_dyn_range", type=float, default=60.0,
                    help="迎角×周波数マップのカラー dB ダイナミックレンジ（デフォルト: 60）")
+
+    # ---- LCO（リミットサイクル振動）非線形動力学解析（オプトイン） ----
+    p.add_argument("--lco", action="store_true",
+                   help="LCO非線形解析（位相図・Poincaré・調和指標・成長率）を有効化")
+    p.add_argument("--lco_signals", default="Fy,Mz",
+                   help="LCO解析の主軸信号（カンマ区切り、デフォルト: Fy,Mz）")
+    p.add_argument("--lco_tau_mode", choices=["zero_cross", "quarter_period"],
+                   default="zero_cross",
+                   help="時間遅れτの推定法（zero_cross=自己相関ゼロ交差 / quarter_period=1/4周期則）")
+    p.add_argument("--lco_fmin", type=float, default=1.0,
+                   help="LCO調和・ピーク解析の下限周波数 [Hz]（デフォルト: 1）")
+    p.add_argument("--lco_fmax", type=float, default=500.0,
+                   help="LCO調和・ピーク解析の上限周波数 [Hz]（デフォルト: 500）")
     return p.parse_args()
 
 
@@ -148,6 +161,14 @@ def angle_from_name(fname):
 def phase_sign(fname):
     """Pdata → +1, Mdata → -1"""
     return -1 if "_Mdata_" in fname else +1
+
+
+def _short_name(fname):
+    """フルファイル名から短縮名を取り出す。
+    例: 20260620_123456_260620_Pdata_15.01.csv → 260620_Pdata_15.01
+    """
+    return re.sub(r"^.*?_(\d{6}_(?:P|M)data_\d+\.\d{2})\.csv$", r"\1",
+                  os.path.basename(fname))
 
 
 def resample_uniform(t, x, fs=FS_TARGET):
@@ -395,7 +416,7 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
     t_rms_Mz, rms_t_Mz = rms_timeseries(Mz_hp, FS_TARGET, args.rms_window, RMS_OVERLAP)
 
     # ---- グラフ出力 ----
-    short = re.sub(r"^.*?_(\d{6}_(?:P|M)data_\d+\.\d{2})\.csv$", r"\1", fname)
+    short = _short_name(fname)
     _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
                 freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
                 t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa)
@@ -420,6 +441,10 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
         "_psd_freqs":   freqs_Fy,   # freqs_Fy と freqs_Mz は同一グリッド
         "_psd_Fy":      psd_Fy,
         "_psd_Mz":      psd_Mz,
+        # LCO非線形解析用（--lco 時のみ使用。CSV へは書き出さない一時キー）
+        "_t":           t_u,
+        "_sig_Fy":      Fy_hp,
+        "_sig_Mz":      Mz_hp,
     }
 
 
@@ -496,8 +521,14 @@ def process_one_condition(exp_dir, ofst, args):
         print(f"  [警告] Pdata/Mdata の CSV が見つかりません: {data_dir}")
         return None
 
+    # LCO解析は遅延 import（lco_analysis が flutter_analysis を import するため、
+    # トップレベル import だと循環参照になる。--lco 時のみ読み込む）
+    if args.lco:
+        import lco_analysis
+
     rows = []
     spec_rows = []   # 迎角×周波数マップ用のスペクトル配列
+    lco_rows  = []   # LCO非線形解析（--lco 時のみ）の結果・中間生成物
     for fname in tqdm(files, desc=f"  {os.path.basename(exp_dir)}", ncols=70):
         phase = "Pdata" if "_Pdata_" in fname else "Mdata"
         result = process_one_point(
@@ -511,6 +542,18 @@ def process_one_condition(exp_dir, ofst, args):
                 "psd_Fy":  result.pop("_psd_Fy"),
                 "psd_Mz":  result.pop("_psd_Mz"),
             })
+            # LCO非線形解析（補正済み信号は --lco 有無に関わらず pop して捨てる）
+            sig_t  = result.pop("_t")
+            sigs   = {"Fy": result.pop("_sig_Fy"), "Mz": result.pop("_sig_Mz")}
+            if args.lco:
+                lco_res = lco_analysis.analyze_point(
+                    sig_t, sigs, result["aoa"],
+                    short=_short_name(fname), fig_dir=fig_dir, args=args
+                )
+                # 指標を summary 行へマージ（自動列追加。自動ラベルは付けない）
+                result.update(lco_res["metrics"])
+                lco_rows.append(lco_res["row"])
+
             result["rep_windspeed_U"]  = rep_U
             result["rep_windspeed_mV"] = rep_mv
             rows.append(result)
@@ -527,7 +570,7 @@ def process_one_condition(exp_dir, ofst, args):
     if spec_rows:
         plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args)
 
-    return df, spec_rows
+    return df, spec_rows, lco_rows
 
 
 # ============================================================
@@ -878,14 +921,16 @@ def main():
 
     summaries  = []
     panel_data = []   # 全条件比較パネル用 (rep_U, spec_rows)
+    lco_data   = []   # 全条件LCO用 (rep_U, lco_rows)
     for cond_dir in cond_dirs:
         log = load_log(cond_dir)
         rep_U = log.get("rep_windspeed_U", 0.0)
         result = process_one_condition(cond_dir, ofst, args)
         if result is not None:
-            df, spec_rows = result
+            df, spec_rows, lco_rows = result
             summaries.append((rep_U, df))
             panel_data.append((rep_U, spec_rows))
+            lco_data.append((rep_U, lco_rows))
 
     # Layer 3: マップ出力（条件フォルダと同じ階層に保存）
     map_dir = os.path.join(search_dir, f"{base_name}_results")
@@ -894,6 +939,11 @@ def main():
     plot_rms_overview(summaries, map_dir)
     plot_rms_overview_6axis(summaries, map_dir)
     plot_aoa_freq_panel(panel_data, map_dir, args)
+
+    # LCO全条件レベルの図（ステップ3以降で実装。--lco 時のみ）
+    if args.lco:
+        import lco_analysis
+        lco_analysis.plot_all_conditions(lco_data, map_dir, args)
 
     print(f"\n[完了] 結果を保存しました: {map_dir}")
 
