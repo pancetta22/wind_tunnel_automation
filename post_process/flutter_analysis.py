@@ -74,6 +74,9 @@ FS_TARGET   = 1200.0    # リサンプリング後のサンプリング周波数
 HEADER_ROWS = 4         # Leptrino CSV のヘッダ行数
 COL_NAMES   = ["t", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
 
+# RMSのみ追加で算出する成分（Fy/Mz は既存ブロックで処理済み）
+EXTRA_RMS_COMPS = ("Fx", "Fz", "Mx", "My")
+
 # フラッター成分抽出用ハイパスフィルタ
 HP_CUTOFF_HZ = 1.0      # 1 Hz 以下をDCドリフトとして除去
 
@@ -244,8 +247,10 @@ def load_ofst_means(ofst_dir):
 
     Returns
     -------
-    ofst : dict  {short_name: {"Fy": float, "Mz": float}}
-            例: {"260620_Pofst_15.01": {"Fy": -2.31, "Mz": 0.012}, ...}
+    ofst : dict  {short_name: {"Fx": float, "Fy": float, "Fz": float,
+                               "Mx": float, "My": float, "Mz": float}}
+            6成分すべての平均値を保持する。
+            例: {"260620_Pofst_15.01": {"Fy": -2.31, "Mz": 0.012, ...}, ...}
     """
     data_dir = os.path.join(ofst_dir, "data")
     if not os.path.isdir(data_dir):
@@ -268,7 +273,11 @@ def load_ofst_means(ofst_dir):
 
         df = load_csv(os.path.join(data_dir, fname))
         ofst[short] = {
+            "Fx": float(df["Fx"].mean()),
             "Fy": float(df["Fy"].mean()),
+            "Fz": float(df["Fz"].mean()),
+            "Mx": float(df["Mx"].mean()),
+            "My": float(df["My"].mean()),
             "Mz": float(df["Mz"].mean()),
         }
 
@@ -350,6 +359,18 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
     rms_Fy = float(np.sqrt(np.mean(Fy_hp ** 2)))
     rms_Mz = float(np.sqrt(np.mean(Mz_hp ** 2)))
 
+    # ---- 追加成分のRMS（Fx/Fz/Mx/My：RMSのみ） ----
+    # Fy/Mz と同じ処理（オフセット補正→リサンプリング→平均引き→ハイパス→RMS）。
+    # ofst_key は上で解決済み・成分非依存なので再利用し、warning も重複させない。
+    rms_extra = {}
+    for comp in EXTRA_RMS_COMPS:
+        x = df[comp].values
+        if ofst_key:
+            x = x - ofst[ofst_key][comp]
+        _, x_u = resample_uniform(t, x)
+        x_hp   = highpass(x_u - np.mean(x_u), args.hp_cutoff)
+        rms_extra[f"rms_{comp}"] = float(np.sqrt(np.mean(x_hp ** 2)))
+
     # ---- RMS（Pofst補正のみ・平均引かず） ----
     Fy_raw_hp = highpass(Fy_u - np.mean(Fy_u[:int(FS_TARGET)]), args.hp_cutoff)
     Mz_raw_hp = highpass(Mz_u - np.mean(Mz_u[:int(FS_TARGET)]), args.hp_cutoff)
@@ -387,6 +408,8 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
         "rms_Mz_raw":   rms_Mz_raw,
         "rms_Fy":       rms_Fy,
         "rms_Mz":       rms_Mz,
+        # 追加成分のRMS（Fx/Fz/Mx/My）。flutter_summary.csv に自動で列追加される
+        **rms_extra,
         "freq_Fy":      freq_Fy,
         "freq_Mz":      freq_Mz,
         "flutter_A_Fy": f_A_Fy,
@@ -743,6 +766,47 @@ def plot_rms_overview(summaries, out_dir):
     print(f"[概観] {out_path} を保存しました")
 
 
+def plot_rms_overview_6axis(summaries, out_dir):
+    """全条件・全迎角の6成分RMS一覧グラフ（2行3列・フラッター強度の俯瞰用）。
+
+    上段 Fx/Fy/Fz [N]・下段 Mx/My/Mz [Nm] を並べ、各サブプロットは
+    横軸=迎角・線の色=風速条件。どの成分（自由度）に振動が乗っているかを俯瞰する。
+    """
+    if not summaries:
+        return
+
+    # (列名, 表示名, 単位) を 2行3列の並び順で定義
+    panels = [
+        ("rms_Fx", "Fx", "N"),  ("rms_Fy", "Fy", "N"),  ("rms_Fz", "Fz", "N"),
+        ("rms_Mx", "Mx", "Nm"), ("rms_My", "My", "Nm"), ("rms_Mz", "Mz", "Nm"),
+    ]
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    flat = axes.ravel()
+    cmap = plt.get_cmap("viridis")
+    n = len(summaries)
+
+    for k, (rep_U, df) in enumerate(summaries):
+        color = cmap(k / max(n - 1, 1))
+        label = f"U={rep_U:.1f} m/s"
+        for ax, (col, comp, unit) in zip(flat, panels):
+            ax.plot(df["aoa"], df[col], marker="o", ms=4,
+                    lw=1.2, color=color, label=label)
+
+    for ax, (col, comp, unit) in zip(flat, panels):
+        ax.set_xlabel("Angle of attack [deg]", fontsize=12)
+        ax.set_ylabel(f"RMS [{unit}]", fontsize=12)
+        ax.set_title(f"{comp} flutter amplitude RMS", fontsize=12)
+        ax.legend(fontsize=8, ncol=2)
+        ax.grid(True, alpha=0.4)
+
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, "rms_overview_6axis.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[概観] {out_path} を保存しました")
+
+
 # ============================================================
 #  メイン
 # ============================================================
@@ -828,6 +892,7 @@ def main():
     os.makedirs(map_dir, exist_ok=True)
     plot_flutter_map(summaries, map_dir)
     plot_rms_overview(summaries, map_dir)
+    plot_rms_overview_6axis(summaries, map_dir)
     plot_aoa_freq_panel(panel_data, map_dir, args)
 
     print(f"\n[完了] 結果を保存しました: {map_dir}")
