@@ -80,6 +80,12 @@ EXTRA_RMS_COMPS = ("Fx", "Fz", "Mx", "My")
 # フラッター成分抽出用ハイパスフィルタ
 HP_CUTOFF_HZ = 1.0      # 1 Hz 以下をDCドリフトとして除去
 
+# 両端トリミング長 [秒]。リサンプリングの補間段差・ハイパス(sosfiltfilt)の端
+# トランジェントが 0s/30s 付近に非物理的な大振幅スパイクを作るため、前処理後に
+# 両端を一定秒だけ切り捨てる。1Hz 4次バターワースの過渡は 1 秒未満で十分減衰し、
+# 30秒計測に対する損失は両端で 3.3% 程度なので RMS/PSD/LCO への実害はない。
+EDGE_TRIM_SEC = 0.5
+
 # LCO収束確認用の時間窓
 RMS_WINDOW_SEC  = 1.0   # 窓幅 [秒]
 RMS_OVERLAP     = 0.5   # オーバーラップ率
@@ -104,6 +110,9 @@ def parse_args():
                    help=f"ハイパスフィルタのカットオフ周波数 [Hz]（デフォルト: {HP_CUTOFF_HZ}）")
     p.add_argument("--rms_window",    type=float, default=RMS_WINDOW_SEC,
                    help=f"LCO収束確認用の窓幅 [秒]（デフォルト: {RMS_WINDOW_SEC}）")
+    p.add_argument("--edge_trim_sec", type=float, default=EDGE_TRIM_SEC,
+                   help=f"前処理後に両端を切り捨てる長さ [秒]（補間段差・フィルタ"
+                        f"端トランジェント除去。0で無効。デフォルト: {EDGE_TRIM_SEC}）")
     p.add_argument("--map_fmax",      type=float, default=50.0,
                    help="迎角×周波数マップの周波数表示上限 [Hz]（デフォルト: 50）")
     p.add_argument("--map_dyn_range", type=float, default=60.0,
@@ -371,20 +380,37 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
     t_u, Fy_u = resample_uniform(t, Fy)
     _,   Mz_u = resample_uniform(t, Mz)
 
-    # ---- 平均引き済み（フラッター成分） ----
-    Fy_ac = Fy_u - np.mean(Fy_u)
-    Mz_ac = Mz_u - np.mean(Mz_u)
+    # ---- 両端トリミングの範囲を決定 ----
+    # 補間段差・ハイパス端トランジェントが 0s/30s 付近に作る非物理的スパイクを
+    # 除去するため、前処理（平均引き→ハイパス）後の信号から両端を切り捨てる。
+    # ハイパスは全長で先にかけ（フィルタの端効果を端側に押し込んでから切る）、
+    # その後に共通インデックス [trim:-trim] でスライスして整合させる。
+    trim = int(getattr(args, "edge_trim_sec", EDGE_TRIM_SEC) * FS_TARGET)
+    if trim <= 0 or 2 * trim >= len(t_u):
+        trim = 0   # 無効化（短すぎるデータで全消ししない安全弁）
+    sl = slice(trim, len(t_u) - trim) if trim > 0 else slice(None)
 
-    # ---- ハイパスフィルタ（DCドリフト除去） ----
-    Fy_hp = highpass(Fy_ac, args.hp_cutoff)
-    Mz_hp = highpass(Mz_ac, args.hp_cutoff)
+    # ---- 平均引き済み（フラッター成分）→ ハイパス → 両端トリム ----
+    Fy_hp = highpass(Fy_u - np.mean(Fy_u), args.hp_cutoff)[sl]
+    Mz_hp = highpass(Mz_u - np.mean(Mz_u), args.hp_cutoff)[sl]
+
+    # ---- RMS（Pofst補正のみ・平均引かず） ----
+    # ハイパスはトリム前の全長でかけ（端効果を端側に押し込む）、同じ sl で切る。
+    # 平均は元データ先頭1秒（トリム前）で取る。Fy_u を上書きする前に算出する。
+    Fy_raw_hp = highpass(Fy_u - np.mean(Fy_u[:int(FS_TARGET)]), args.hp_cutoff)[sl]
+    Mz_raw_hp = highpass(Mz_u - np.mean(Mz_u[:int(FS_TARGET)]), args.hp_cutoff)[sl]
+
+    # 以降の時系列・プロットもトリム後の区間に揃える
+    t_u  = t_u[sl]
+    Fy_u = Fy_u[sl]
+    Mz_u = Mz_u[sl]
 
     # ---- RMS（フラッター成分） ----
     rms_Fy = float(np.sqrt(np.mean(Fy_hp ** 2)))
     rms_Mz = float(np.sqrt(np.mean(Mz_hp ** 2)))
 
     # ---- 追加成分のRMS（Fx/Fz/Mx/My：RMSのみ） ----
-    # Fy/Mz と同じ処理（オフセット補正→リサンプリング→平均引き→ハイパス→RMS）。
+    # Fy/Mz と同じ処理（オフセット補正→リサンプリング→平均引き→ハイパス→トリム→RMS）。
     # ofst_key は上で解決済み・成分非依存なので再利用し、warning も重複させない。
     rms_extra = {}
     for comp in EXTRA_RMS_COMPS:
@@ -392,12 +418,10 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
         if ofst_key:
             x = x - ofst[ofst_key][comp]
         _, x_u = resample_uniform(t, x)
-        x_hp   = highpass(x_u - np.mean(x_u), args.hp_cutoff)
+        x_hp   = highpass(x_u - np.mean(x_u), args.hp_cutoff)[sl]
         rms_extra[f"rms_{comp}"] = float(np.sqrt(np.mean(x_hp ** 2)))
 
-    # ---- RMS（Pofst補正のみ・平均引かず） ----
-    Fy_raw_hp = highpass(Fy_u - np.mean(Fy_u[:int(FS_TARGET)]), args.hp_cutoff)
-    Mz_raw_hp = highpass(Mz_u - np.mean(Mz_u[:int(FS_TARGET)]), args.hp_cutoff)
+    # ---- raw版RMS（Fy_raw_hp/Mz_raw_hp は上で算出済み） ----
     rms_Fy_raw = float(np.sqrt(np.mean(Fy_raw_hp ** 2)))
     rms_Mz_raw = float(np.sqrt(np.mean(Mz_raw_hp ** 2)))
 
