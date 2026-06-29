@@ -381,7 +381,7 @@ def analyze_signal(x, fs=FS_TARGET, fmin=LCO_FMIN_HZ, fmax=LCO_FMAX_HZ,
 #  カルテ図（3点セット：時系列／位相図／スペクトル）
 # ============================================================
 def plot_chart(fig_dir, short, t, signals, fs=FS_TARGET, aoa=None,
-               fmax_disp=None):
+               fmax_disp=None, case_name="", rep_U=None):
     """1計測点のカルテ図（Trickey fig.4-7 形式）を出力する。
 
     signals : dict {"Fy": (x_hp, metrics, artifacts), "Mz": (...)}
@@ -393,9 +393,14 @@ def plot_chart(fig_dir, short, t, signals, fs=FS_TARGET, aoa=None,
     nrow = len(names)
     fig, axes = plt.subplots(nrow, 3, figsize=(15, 4 * nrow), squeeze=False)
 
-    title = f"LCO chart   ({short})"
+    title = "LCO chart"
     if aoa is not None:
         title = f"AoA = {aoa:+d}°   {title}"
+    if case_name:
+        title += f"   {case_name}"
+    if rep_U is not None:
+        title += f"   U ≈ {rep_U:.2f} m/s"
+    title += f"   ({short})"
     fig.suptitle(title, fontsize=13)
 
     for i, name in enumerate(names):
@@ -448,7 +453,7 @@ def plot_chart(fig_dir, short, t, signals, fs=FS_TARGET, aoa=None,
 # ============================================================
 #  flutter_analysis からのエントリ関数
 # ============================================================
-def analyze_point(t, sigs, aoa, short, fig_dir, args):
+def analyze_point(t, sigs, aoa, short, fig_dir, args, case_name="", rep_U=None):
     """1計測点のLCO解析を行い、指標とカルテ図を出力する。
 
     flutter_analysis.process_one_condition のループから --lco 時に呼ばれる。
@@ -461,6 +466,8 @@ def analyze_point(t, sigs, aoa, short, fig_dir, args):
     short : str             短縮名（図ファイル名に使う）
     fig_dir : str           図の出力先
     args  : Namespace       CLI引数（lco_signals / lco_tau_mode / lco_fmin/fmax）
+    case_name : str         条件フォルダ名（図タイトル表記用）
+    rep_U : float           代表風速 [m/s]（図タイトル表記用）
 
     Returns
     -------
@@ -497,7 +504,8 @@ def analyze_point(t, sigs, aoa, short, fig_dir, args):
 
     if chart_sigs:
         plot_chart(fig_dir, short, t, chart_sigs, fs=FS_TARGET,
-                   aoa=aoa, fmax_disp=fmax_disp)
+                   aoa=aoa, fmax_disp=fmax_disp,
+                   case_name=case_name, rep_U=rep_U)
 
     return {"metrics": metrics, "row": row}
 
@@ -523,6 +531,7 @@ def plot_phase_sweep(lco_rows, exp_dir, rep_U, args):
     """
     if not lco_rows:
         return
+    case_name = os.path.basename(exp_dir)
     names = [s.strip() for s in args.lco_signals.split(",") if s.strip()]
     # 迎角昇順（重複迎角は Pdata/Mdata 別個に残す＝そのまま並べる）
     rows = sorted(lco_rows, key=lambda r: r["aoa"])
@@ -539,7 +548,8 @@ def plot_phase_sweep(lco_rows, exp_dir, rep_U, args):
         fig, axes = plt.subplots(nrow, ncol,
                                  figsize=(2.0 * ncol, 2.0 * nrow),
                                  squeeze=False)
-        fig.suptitle(f"Phase sweep  {name}   U ≈ {rep_U:.2f} m/s", fontsize=13)
+        fig.suptitle(f"Phase sweep  {name}   {case_name}   U ≈ {rep_U:.2f} m/s",
+                     fontsize=13)
 
         for k, r in enumerate(cells):
             ax = axes[k // ncol][k % ncol]

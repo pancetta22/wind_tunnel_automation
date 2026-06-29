@@ -341,7 +341,7 @@ def find_ofst_key(data_fname, ofst, phase):
 # ============================================================
 #  1計測点の処理
 # ============================================================
-def process_one_point(csv_path, ofst, phase, args, fig_dir):
+def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=None):
     """1つの6軸CSVを処理して結果辞書を返す。
 
     Returns
@@ -446,7 +446,8 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
     short = _short_name(fname)
     _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
                 freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
-                t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa)
+                t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa,
+                case_name=case_name, rep_U=rep_U)
 
     return {
         "ref_angle":    ref_angle,
@@ -480,12 +481,20 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir):
 # ============================================================
 def _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
                 freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
-                t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa):
+                t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa,
+                case_name="", rep_U=None):
 
     os.makedirs(fig_dir, exist_ok=True)
 
+    title = f"AoA = {aoa:+d}°"
+    if case_name:
+        title += f"   {case_name}"
+    if rep_U is not None:
+        title += f"   U ≈ {rep_U:.2f} m/s"
+    title += f"   ({short})"
+
     fig, axes = plt.subplots(3, 2, figsize=(14, 10))
-    fig.suptitle(f"AoA = {aoa:+d}°   ({short})", fontsize=13)
+    fig.suptitle(title, fontsize=13)
 
     # --- 上段: 時系列（オフセット補正済み・平均引き済み） ---
     axes[0, 0].plot(t_u, Fy_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
@@ -531,8 +540,9 @@ def process_one_condition(exp_dir, ofst, args):
     rep_U   = log.get("rep_windspeed_U",  0.0)
     rep_mv  = log.get("rep_windspeed_mV", 0.0)
     ofst_dir_log = log.get("ofst_dir", "")
+    case_name = os.path.basename(exp_dir)
 
-    print(f"\n[条件] {os.path.basename(exp_dir)}  U ≈ {rep_U:.2f} m/s  ({rep_mv:.1f} mV)")
+    print(f"\n[条件] {case_name}  U ≈ {rep_U:.2f} m/s  ({rep_mv:.1f} mV)")
 
     data_dir = os.path.join(exp_dir, "data")
     fig_dir  = os.path.join(exp_dir, "figures")
@@ -559,7 +569,8 @@ def process_one_condition(exp_dir, ofst, args):
     for fname in tqdm(files, desc=f"  {os.path.basename(exp_dir)}", ncols=70):
         phase = "Pdata" if "_Pdata_" in fname else "Mdata"
         result = process_one_point(
-            os.path.join(data_dir, fname), ofst, phase, args, fig_dir
+            os.path.join(data_dir, fname), ofst, phase, args, fig_dir,
+            case_name=case_name, rep_U=rep_U
         )
         if result is not None:
             # スペクトル配列は DataFrame に混ぜず別リストへ退避
@@ -575,7 +586,8 @@ def process_one_condition(exp_dir, ofst, args):
             if args.lco:
                 lco_res = lco_analysis.analyze_point(
                     sig_t, sigs, result["aoa"],
-                    short=_short_name(fname), fig_dir=fig_dir, args=args
+                    short=_short_name(fname), fig_dir=fig_dir, args=args,
+                    case_name=case_name, rep_U=rep_U
                 )
                 # 指標を summary 行へマージ（自動列追加。自動ラベルは付けない）
                 result.update(lco_res["metrics"])
@@ -595,7 +607,7 @@ def process_one_condition(exp_dir, ofst, args):
 
     # 迎角×周波数マップ（fig10風スペクトログラム）
     if spec_rows:
-        plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args)
+        plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args, case_name=case_name)
 
     # LCO: 迎角に沿った位相図スイープ（--lco 時のみ）
     if args.lco and lco_rows:
@@ -713,12 +725,13 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
     return u_axis, f_plot, Z_db, peak_u, peak_freq
 
 
-def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
+def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args, case_name=""):
     """1風速条件について、横軸=迎角・縦軸=周波数・濃淡=PSD[dB] のマップを描く。
 
     Trickey et al. (2002) の fig10（流速×周波数スペクトログラム）の流速軸を
     迎角に置き換えたもの。Fy・Mz それぞれ1枚ずつ出力する。
     """
+    case_name = case_name or os.path.basename(exp_dir)
     for axis, key, unit in [("Fy", "psd_Fy", "N"), ("Mz", "psd_Mz", "Nm")]:
         grid = build_aoa_freq_grid(spec_rows, key, args)
         if grid is None:
@@ -739,7 +752,8 @@ def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args):
         ax.set_xlabel("Angle of attack [deg]", fontsize=13)
         ax.set_ylabel("Frequency [Hz]", fontsize=13)
         ax.set_ylim(0, args.map_fmax)
-        ax.set_title(f"AoA-frequency map  {axis} [{unit}]   U ≈ {rep_U:.2f} m/s",
+        ax.set_title(f"AoA-frequency map  {axis} [{unit}]   {case_name}   "
+                     f"U ≈ {rep_U:.2f} m/s",
                      fontsize=13)
         ax.legend(fontsize=10, loc="upper right")
 
