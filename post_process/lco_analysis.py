@@ -152,35 +152,53 @@ def delay_embedding(x, tau_samples, dim=2):
 def poincare_section(x, fs=FS_TARGET, f0=None):
     """サイクルごとに1点をサンプリングして Poincaré 断面の点群を返す。
 
-    Trickey の「フラップ速度が上から0を横切る瞬間」= 変位の極大（山）に相当。
+    Trickey に倣い「速度が上から（正→負）0 を横切る瞬間」の変位値をサンプルする。
+    速度は信号の数値微分 v = d x/dt で求め、v が正→負に符号反転する各点で
+    線形補間して v=0 となる瞬間の x（変位）を内挿する（サンプル粒度より精密）。
     周期LCO=1点に集中、period-2=2点、quasi-periodic=閉曲線、chaotic=散布 となる。
 
-    高調波由来の局所的な山を拾わないよう、基本周期に基づく最小ピーク間隔と
-    プロミネンスを与えて主極大のみ検出する。
+    高調波由来の微小な速度ゼロクロスを拾わないよう、基本周期に基づく最小間隔を
+    与えて主極大（1周期1点）のみ採用する。
 
     Parameters
     ----------
-    f0 : float or None   基本周波数 [Hz]。あれば最小ピーク間隔の決定に使う。
+    f0 : float or None   基本周波数 [Hz]。あれば1周期1点の最小間隔の決定に使う。
 
     Returns
     -------
-    x_peaks : ndarray   各サイクルの極大での x の値（振幅）
+    x_cross : ndarray   各サイクルで速度が正→負に0を横切る瞬間の x の値（変位）
     """
     x = np.asarray(x, dtype=float)
     if len(x) < 8:
         return np.array([])
 
-    # 基本周期の 0.7 倍を最小ピーク間隔に（1周期1ピークを担保）
-    if f0 is not None and np.isfinite(f0) and f0 > 0:
-        distance = max(int(0.7 * fs / f0), 1)
-    else:
-        distance = 1
-    prominence = 0.25 * np.std(x)
-    peaks, _ = signal.find_peaks(x, distance=distance,
-                                 prominence=max(prominence, 1e-12))
-    if peaks.size == 0:
+    # 速度（数値微分）。ゼロクロス判定は符号のみだが物理スケールに揃えておく。
+    v = np.gradient(x) * fs
+
+    # 速度が正→負に0を横切る index（v[i] > 0 かつ v[i+1] <= 0）
+    crossings = np.where((v[:-1] > 0) & (v[1:] <= 0))[0]
+    if crossings.size == 0:
         return np.array([])
-    return x[peaks]
+
+    # 1周期1点ガード：基本周期の 0.7 倍未満の間隔で続くゼロクロスは間引く。
+    if f0 is not None and np.isfinite(f0) and f0 > 0:
+        dmin = max(int(0.7 * fs / f0), 1)
+    else:
+        dmin = 1
+
+    x_cross = []
+    last = -dmin  # 最初の点は必ず採用できるよう十分過去に
+    for i in crossings:
+        if i - last < dmin:
+            continue
+        # v=0 となる位置で x を線形補間（v[i] > 0 >= v[i+1] なので分母は正）
+        denom = v[i] - v[i + 1]
+        frac = v[i] / denom if denom != 0 else 0.0
+        x_cross.append(x[i] + frac * (x[i + 1] - x[i]))
+        last = i
+    if not x_cross:
+        return np.array([])
+    return np.asarray(x_cross, dtype=float)
 
 
 def poincare_spread(pts):
@@ -667,8 +685,9 @@ def _auto_select_aoas(panel_data):
 
 
 def plot_bifurcation(lco_data, map_dir, names):
-    """分岐図（Trickey fig.3）。横軸=迎角、縦軸=Poincaré点の振幅。
+    """分岐図（Trickey fig.3）。横軸=迎角、縦軸=Poincaré点（変位）。
 
+    Trickey に倣い「速度が上から（正→負）0 を横切る瞬間」の変位値をプロットする。
     各風速条件を1枚に重ね、フラッター発生迎角域での応答の質（1点に集中＝
     periodic / 縦に散らばる＝QP・chaos）を俯瞰する。風速ごとに色分け。
 
@@ -700,8 +719,10 @@ def plot_bifurcation(lco_data, map_dir, names):
         cbar = fig.colorbar(sm, ax=ax)
         cbar.set_label("wind speed U [m/s]", fontsize=12)
         ax.set_xlabel("Angle of attack [deg]", fontsize=13)
-        ax.set_ylabel(f"Poincaré section value ({name})", fontsize=13)
-        ax.set_title(f"Bifurcation diagram  {name}  (Poincaré amplitude vs AoA)",
+        ax.set_ylabel(f"Poincaré value @ velocity zero-cross ({name})",
+                      fontsize=13)
+        ax.set_title(f"Bifurcation diagram  {name}  "
+                     f"(displacement @ velocity:+→− vs AoA)",
                      fontsize=13)
         out = os.path.join(map_dir, f"bifurcation_{name}.png")
         fig.savefig(out, dpi=150, bbox_inches="tight")
