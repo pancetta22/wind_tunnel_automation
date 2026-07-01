@@ -1010,6 +1010,102 @@ def plot_flutter_map(summaries, out_dir):
             print(f"[マップ] {fname} を保存しました")
 
 
+def plot_strouhal_fu(summaries, out_dir, args):
+    """卓越周波数 f を縦軸・風速 U を横軸に取り、等St線を重ねた散布図を描く。
+
+    渦放出（St一定 → 点が等St線に沿う）とロックイン（f が固有振動数に張り付き、
+    St が 1/U で低下 → 点が等St線を横切る）を判別するための図。Fy/Mz を左右の
+    サブプロットに並べ、各点をフラッター判定（Route A）の有無で色分けする。
+
+    summaries: list of (rep_U, DataFrame)  各 DataFrame に mean_U / freq_Fy /
+               freq_Mz / flutter_A_Fy / flutter_A_Mz を含む。
+    横軸は各計測点の mean_U（rep_U ではない）。代表長さは REF_LENGTH_M。
+    """
+    if not summaries:
+        return
+
+    L = REF_LENGTH_M
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
+
+    for ax, freq_col, flut_col, comp, unit in [
+        (axes[0], "freq_Fy", "flutter_A_Fy", "Fy", "N"),
+        (axes[1], "freq_Mz", "flutter_A_Mz", "Mz", "Nm"),
+    ]:
+        u_all = []   # 等St線のレンジ決定用に有効な mean_U を集める
+        f_all = []
+        for _rep_U, df in summaries:
+            if freq_col not in df.columns or "mean_U" not in df.columns:
+                continue
+            # mean_U が有限かつ正、freq が有限の点のみ採用
+            valid = (df["mean_U"].notna() & (df["mean_U"] > 0)
+                     & df[freq_col].notna())
+            if not valid.any():
+                continue
+            u = df.loc[valid, "mean_U"].values
+            f = df.loc[valid, freq_col].values
+            u_all.extend(u)
+            f_all.extend(f)
+
+            # フラッター判定（Route A）で色分け。None（閾値未設定）は灰○。
+            if flut_col in df.columns:
+                flag = df.loc[valid, flut_col].values
+            else:
+                flag = np.full(u.shape, np.nan)
+            flag_num = pd.to_numeric(pd.Series(flag), errors="coerce").values
+            idx_yes = flag_num == 1
+            idx_no  = flag_num == 0
+            idx_na  = ~np.isfinite(flag_num)
+            ax.scatter(u[idx_yes], f[idx_yes], marker="x", s=80,
+                       color="red", zorder=3, label="_")
+            ax.scatter(u[idx_no], f[idx_no], marker="o", s=50,
+                       color="royalblue", zorder=3, label="_")
+            ax.scatter(u[idx_na], f[idx_na], marker="o", s=50,
+                       facecolors="none", edgecolors="gray", zorder=3, label="_")
+
+        # 散布点を打ってから軸範囲を確定し、その範囲で等St線を引く
+        if u_all:
+            u_max = max(u_all)
+            f_max = max(f_all)
+            ax.set_xlim(0, u_max * 1.05)
+            ax.set_ylim(0, f_max * 1.15)
+            xr = ax.get_xlim()
+            yr = ax.get_ylim()
+            u_line = np.array([xr[0], xr[1]])
+            for st in (0.05, 0.1, 0.15, 0.2, 0.3, 0.5):
+                f_line = st * u_line / L
+                # 縦軸上限を超える線は描かない（読みにくくなるため）
+                if f_line[1] > yr[1] * 1.001 and f_line[0] > yr[1]:
+                    continue
+                ax.plot(u_line, f_line, color="0.6", lw=0.8,
+                        ls="--", zorder=1, label="_")
+                # ラベルは線が縦軸上限に収まる x 位置に置く
+                x_lbl = xr[1] * 0.92
+                y_lbl = st * x_lbl / L
+                if y_lbl > yr[1]:
+                    y_lbl = yr[1] * 0.95
+                    x_lbl = y_lbl * L / st
+                ax.text(x_lbl, y_lbl, f"St={st:g}", color="0.4",
+                        fontsize=9, ha="right", va="bottom", zorder=2)
+
+        # 凡例用ダミー
+        ax.scatter([], [], marker="x", color="red",       label="Flutter (Route A)")
+        ax.scatter([], [], marker="o", color="royalblue",  label="No flutter")
+        ax.plot([], [], color="0.6", lw=0.8, ls="--",      label="iso-St lines")
+
+        ax.set_xlabel("Wind speed U [m/s]", fontsize=13)
+        ax.set_ylabel("Dominant frequency f [Hz]", fontsize=13)
+        ax.set_title(f"{comp} [{unit}]", fontsize=13)
+        ax.legend(fontsize=10, loc="upper left")
+        ax.grid(True, alpha=0.4)
+
+    fig.suptitle(f"Strouhal number  (St = f·L/U,  L = {L:g} m)", fontsize=14)
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, "strouhal_fu.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("[マップ] strouhal_fu.png を保存しました")
+
+
 def plot_rms_overview(summaries, out_dir):
     """全条件・全迎角のRMS一覧グラフ（フラッター強度の俯瞰用）。"""
     if not summaries:
@@ -1171,6 +1267,7 @@ def main():
     map_dir = os.path.join(search_dir, f"{base_name}_results")
     os.makedirs(map_dir, exist_ok=True)
     plot_flutter_map(summaries, map_dir)
+    plot_strouhal_fu(summaries, map_dir, args)
     plot_rms_overview(summaries, map_dir)
     plot_rms_overview_6axis(summaries, map_dir)
     plot_aoa_freq_panel(panel_data, map_dir, args)
