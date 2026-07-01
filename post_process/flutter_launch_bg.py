@@ -32,7 +32,10 @@ def main():
     fa_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flutter_analysis.py")
     flag     = "--exp_dir" if mode == "exp" else "--base_dir"
     log_path = os.path.join(target_dir, "postprocess_error.log")
-    cmd      = [sys.executable, fa_path, flag, target_dir, "--lco"]
+    use_lco  = os.environ.get("WINDY_BG_LCO", "false").lower() == "true"
+    cmd      = [sys.executable, fa_path, flag, target_dir]
+    if use_lco:
+        cmd.append("--lco")
 
     try:
         log_f = open(log_path, "w", encoding="utf-8")

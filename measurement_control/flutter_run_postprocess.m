@@ -1,11 +1,13 @@
-function flutter_run_postprocess(target_dir, mode, cfg)
+function flutter_run_postprocess(target_dir, mode, cfg, lco)
 %% flutter_run_postprocess.m
 % フラッター実験の後処理（flutter_analysis.py）をバックグラウンドで実行する。
-%   LCO 非線形解析（--lco）付き。完了を待たずにすぐ返るため実験を止めない。
+%   完了を待たずにすぐ返るため実験を止めない。
 %
 % 使い方:
-%   flutter_run_postprocess(cond_dir, 'exp',  cfg)   % 単一条件（_cXX）を随時解析
-%   flutter_run_postprocess(base_dir, 'base', cfg)   % 全条件の横断マップを生成
+%   flutter_run_postprocess(cond_dir, 'exp',  cfg)       % LCO なし（軽量・計測中向け）
+%   flutter_run_postprocess(base_dir, 'base', cfg, true) % LCO あり（全条件完了後向け）
+%
+%   lco（第4引数）: true = --lco 付き、false/省略 = --lco なし
 %
 % post_process/flutter_launch_bg.py をランチャーとして使う。
 % ランチャーが subprocess.Popen で flutter_analysis.py を切り離して起動し
@@ -14,7 +16,8 @@ function flutter_run_postprocess(target_dir, mode, cfg)
 
     root = fileparts(fileparts(mfilename('fullpath')));
 
-    if nargin < 2 || isempty(mode), mode = 'exp'; end
+    if nargin < 2 || isempty(mode), mode = 'exp';  end
+    if nargin < 4 || isempty(lco),  lco  = false; end
     if nargin < 3 || isempty(cfg)
         config_path = fullfile(root, 'config.json');
         if ~isfile(config_path)
@@ -62,14 +65,18 @@ function flutter_run_postprocess(target_dir, mode, cfg)
     % 日本語パスが Python 側で文字化けする。環境変数経由で渡すことで回避する。
     setenv('WINDY_BG_TARGET', target_dir);
     setenv('WINDY_BG_MODE',   mode);
+    setenv('WINDY_BG_LCO',    mat2str(logical(lco)));   % 'true' / 'false'
     cmd = sprintf('"%s" "%s"', venv_python, launcher);
     [st, out] = system(cmd);
     setenv('WINDY_BG_TARGET', '');
     setenv('WINDY_BG_MODE',   '');
+    setenv('WINDY_BG_LCO',    '');
     if ~isempty(strtrim(out)), fprintf('%s\n', strtrim(out)); end
 
     if st == 0
-        fprintf('[後処理] バックグラウンドで解析を開始しました（--%s, --lco）\n', mode);
+        lco_label = '';
+        if lco, lco_label = ', --lco'; end
+        fprintf('[後処理] バックグラウンドで解析を開始しました（--%s%s）\n', mode, lco_label);
         fprintf('         対象: %s\n', target_dir);
         fprintf('         失敗時ログ: %s\n\n', fullfile(target_dir, 'postprocess_error.log'));
     else

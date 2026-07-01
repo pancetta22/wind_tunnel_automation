@@ -183,9 +183,10 @@ while true
     fprintf('[保存先] %s\n\n', cond_dir);
     notify_sound_(2);
 
-    % ---- この条件の後処理を随時実行（flutter_analysis.py --exp_dir --lco）----
+    % ---- この条件の後処理を随時実行（LCO なし・軽量）----
+    %   計測中に重い LCO 解析を走らせないよう --lco は付けない。
     %   失敗しても実験は止めない（warning のみ）
-    flutter_run_postprocess(cond_dir, 'exp', cfg);
+    flutter_run_postprocess(cond_dir, 'exp', cfg, false);
 
     % ---- 任意の迎角へ移動して目視確認（計測なし）----
     manual_angle_check_(stage, max_angle, cfg);
@@ -207,10 +208,9 @@ notify_sound_(4);
 
 try; stage.moveToAngle(0); catch; end
 
-% ---- 全条件の横断マップを生成（flutter_analysis.py --base_dir --lco）----
-%   条件ごとの解析は各条件完了時に実施済み。ここではフラッター発生マップ・
-%   RMS一覧など全条件横断の図を出力する。失敗しても続行（warning のみ）。
-flutter_run_postprocess(base_exp_dir, 'base', cfg);
+% ---- 全条件の横断マップを生成（--base_dir --lco）----
+%   実験終了後なので LCO 付きで実行。失敗しても続行（warning のみ）。
+flutter_run_postprocess(base_exp_dir, 'base', cfg, true);
 
 cleanup_devices_(stage, logger, s_volt, monitor);
 
