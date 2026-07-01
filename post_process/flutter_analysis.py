@@ -46,6 +46,7 @@ flutter_analysis.py  フラッター実験 後処理スクリプト
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -89,6 +90,69 @@ EDGE_TRIM_SEC = 0.5
 # LCO収束確認用の時間窓
 RMS_WINDOW_SEC  = 1.0   # 窓幅 [秒]
 RMS_OVERLAP     = 0.5   # オーバーラップ率
+
+# 風速較正のデフォルト（experiment_log.json に無い場合のフォールバック。
+# make_windspeed.py の DEFAULTS と一致させる）
+WINDSPEED_DEFAULTS = {
+    "water_density":  0.99704,
+    "volt_offset_mV": -5.0,
+    "calib_a":        0.007904809948345278,
+    "calib_b":        -0.340200009144243,
+}
+
+
+# ============================================================
+#  差圧電圧 → 風速（make_windspeed.py の mV_to_U と完全一致）
+# ============================================================
+def mv_to_U(mv, rho, water_density, offset_mV, a, b):
+    """差圧電圧 [mV] から風速 [m/s] を計算する。
+
+    U = sqrt(2 * water_density * ((mV - offset) * a + b) * g / rho)
+    """
+    G = 9.80665
+    h = (mv - offset_mV) * a + b
+    inner = 2.0 * water_density * h * G / rho
+    if inner <= 0:
+        return 0.0
+    return math.sqrt(inner)
+
+
+def windspeed_params_from_log(log):
+    """experiment_log.json から風速計算パラメータ一式を取り出す。
+
+    無い項目は WINDSPEED_DEFAULTS でフォールバックする。rho は rho_kg_m3。
+    """
+    return {
+        "rho":           float(log.get("rho_kg_m3", 0.0)) or None,
+        "water_density": float(log.get("water_density", WINDSPEED_DEFAULTS["water_density"])),
+        "offset_mV":     float(log.get("volt_offset_mV", WINDSPEED_DEFAULTS["volt_offset_mV"])),
+        "a":             float(log.get("calib_a", WINDSPEED_DEFAULTS["calib_a"])),
+        "b":             float(log.get("calib_b", WINDSPEED_DEFAULTS["calib_b"])),
+    }
+
+
+def mean_U_from_volt_raw(data_csv_path, ws_params):
+    """計測点の _volt_raw.csv から平均差圧電圧を求め、平均風速 [m/s] を返す。
+
+    data_csv_path は 6軸CSV のパス。対応する _volt_raw.csv を同フォルダから探す。
+    ファイルが無い・電圧が読めない・rho 不明なら NaN を返す。
+    """
+    if ws_params is None or ws_params.get("rho") in (None, 0.0):
+        return float("nan")
+
+    volt_path = re.sub(r"\.csv$", "_volt_raw.csv", data_csv_path)
+    if not os.path.isfile(volt_path):
+        return float("nan")
+    try:
+        vdf = pd.read_csv(volt_path, encoding="utf-8")
+    except Exception:
+        return float("nan")
+    if "voltage_mV" not in vdf.columns or len(vdf) == 0:
+        return float("nan")
+
+    mv_mean = float(vdf["voltage_mV"].mean())
+    return mv_to_U(mv_mean, ws_params["rho"], ws_params["water_density"],
+                   ws_params["offset_mV"], ws_params["a"], ws_params["b"])
 
 
 # ============================================================
@@ -341,7 +405,8 @@ def find_ofst_key(data_fname, ofst, phase):
 # ============================================================
 #  1計測点の処理
 # ============================================================
-def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=None):
+def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=None,
+                      ws_params=None):
     """1つの6軸CSVを処理して結果辞書を返す。
 
     Returns
@@ -449,10 +514,15 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
                 t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa,
                 case_name=case_name, rep_U=rep_U)
 
+    # ---- この計測点の平均風速（_volt_raw.csv の平均差圧電圧から算出） ----
+    # 代表風速（各条件の冒頭1点）ではなく、当該計測データ全体の平均を使う。
+    mean_U = mean_U_from_volt_raw(csv_path, ws_params)
+
     return {
         "ref_angle":    ref_angle,
         "suffix":       suffix,
         "aoa":          aoa,
+        "mean_U":       mean_U,
         "rms_Fy_raw":   rms_Fy_raw,
         "rms_Mz_raw":   rms_Mz_raw,
         "rms_Fy":       rms_Fy,
@@ -542,6 +612,9 @@ def process_one_condition(exp_dir, ofst, args):
     ofst_dir_log = log.get("ofst_dir", "")
     case_name = os.path.basename(exp_dir)
 
+    # 計測点ごとの平均風速を算出するためのパラメータ（各点の _volt_raw.csv から算出）
+    ws_params = windspeed_params_from_log(log)
+
     print(f"\n[条件] {case_name}  U ≈ {rep_U:.2f} m/s  ({rep_mv:.1f} mV)")
 
     data_dir = os.path.join(exp_dir, "data")
@@ -570,12 +643,13 @@ def process_one_condition(exp_dir, ofst, args):
         phase = "Pdata" if "_Pdata_" in fname else "Mdata"
         result = process_one_point(
             os.path.join(data_dir, fname), ofst, phase, args, fig_dir,
-            case_name=case_name, rep_U=rep_U
+            case_name=case_name, rep_U=rep_U, ws_params=ws_params
         )
         if result is not None:
             # スペクトル配列は DataFrame に混ぜず別リストへ退避
             spec_rows.append({
                 "aoa":     result["aoa"],
+                "mean_U":  result["mean_U"],
                 "freqs":   result.pop("_psd_freqs"),
                 "psd_Fy":  result.pop("_psd_Fy"),
                 "psd_Mz":  result.pop("_psd_Mz"),
@@ -678,6 +752,11 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
     build_aoa_freq_grid が迎角軸で束ねるのに対し、こちらは迎角を固定して
     全風速条件（panel_data）を風速軸に並べる。
 
+    風速軸は代表風速（rep_U）ではなく、対象迎角における各計測点の平均風速
+    （spec_row["mean_U"] ＝ その点の _volt_raw.csv の平均差圧電圧から算出）を使う。
+    同一条件で target_aoa の計測点が複数（Pdata/Mdata 等）ある場合は mean_U も平均する。
+    mean_U が NaN の条件は rep_U にフォールバックする。
+
     Parameters
     ----------
     panel_data : list of (rep_U, spec_rows)
@@ -692,23 +771,31 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
         return None
 
     freqs = None
-    cols = {}   # rep_U -> 平均PSD（target_aoa の重複は平均）
+    # 条件ごとに (mean_U, 平均PSD) を作る。風速値が偶然衝突しても条件は潰さない
+    # よう、いったんリストで持ってから最後に風速昇順で並べる。
+    entries = []   # list of (u_val, psd_col)
     for rep_U, spec_rows in panel_data:
-        psds = [r[key] for r in spec_rows if r["aoa"] == target_aoa]
-        if not psds:
+        matched = [r for r in spec_rows if r["aoa"] == target_aoa]
+        if not matched:
             continue
         if freqs is None:
-            freqs = next(r["freqs"] for r in spec_rows if r["aoa"] == target_aoa)
-        cols[rep_U] = np.vstack(psds).mean(axis=0)
+            freqs = matched[0]["freqs"]
+        psds = np.vstack([r[key] for r in matched]).mean(axis=0)
+        # 対象迎角の計測点の平均風速。全て NaN なら代表風速へフォールバック
+        u_vals = [r.get("mean_U", np.nan) for r in matched]
+        u_vals = [u for u in u_vals if u is not None and np.isfinite(u)]
+        u_val = float(np.mean(u_vals)) if u_vals else float(rep_U)
+        entries.append((u_val, psds))
 
-    if not cols or freqs is None:
+    if not entries or freqs is None:
         return None
 
-    u_axis = np.array(sorted(cols.keys()))
+    entries.sort(key=lambda e: e[0])
+    u_axis = np.array([e[0] for e in entries])
     fmask  = freqs <= args.map_fmax
     f_plot = freqs[fmask]
 
-    Z = np.column_stack([cols[u][fmask] for u in u_axis])
+    Z = np.column_stack([e[1][fmask] for e in entries])
     zmax = Z.max()
     if zmax <= 0:
         return None
