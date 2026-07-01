@@ -168,7 +168,7 @@ while true
     manual_angle_check_(stage, max_angle, cfg);
 
     % ---- Pdata ----
-    monitor.setConditionLabel(cond_label);
+    monitor.setConditionLabel(cond_label, rep_U);
     monitor.setTimeLimitSec(measure_sec);
     monitor.setPhase('Pdata');
     run_data_phase_('Pdata', cond_data_dir, cond_dir, date_str, ...

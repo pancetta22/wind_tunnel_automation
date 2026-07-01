@@ -65,6 +65,7 @@ classdef FlutterWindyMonitor < handle
 
         % 状態
         conditionLabel_   % 'c01', 'c02', 'ofst' など
+        repWindspeed_     % 代表風速 [m/s]（[] のときは非表示）
         currentPhase_     % 'Pofst', 'Mofst', 'Pdata', 'Mdata'
         timeLimitSec_     % 秒数制限（Pdata/Mdata）。[]の場合はKBベース表示
 
@@ -113,6 +114,7 @@ classdef FlutterWindyMonitor < handle
             obj.ylim_force_      = [];
             obj.ylim_moment_     = [];
             obj.conditionLabel_ = '---';
+            obj.repWindspeed_   = [];
             obj.currentPhase_   = '---';
             obj.timeLimitSec_   = [];
             obj.init_figure_();
@@ -121,9 +123,13 @@ classdef FlutterWindyMonitor < handle
         % ============================================================
         %  条件名・秒数制限の設定
         % ============================================================
-        function setConditionLabel(obj, label)
+        function setConditionLabel(obj, label, repU)
             % 'c01', 'c02', 'ofst' など
+            % repU を渡すとヘッダに代表風速（例 12.2 m/s）を併記する。
             obj.conditionLabel_ = label;
+            if nargin >= 3
+                obj.repWindspeed_ = repU;
+            end
             obj.update_header_text_();
         end
 
@@ -271,8 +277,12 @@ classdef FlutterWindyMonitor < handle
 
         function update_header_text_(obj)
             % ヘッダ左のテキストを「条件名 / フェーズ名」で更新
+            % 代表風速が設定されていれば「（12.2 m/s）」を末尾に併記する。
             if ~obj.is_open_(), return; end
             label = sprintf('%s  /  %s', obj.conditionLabel_, obj.currentPhase_);
+            if ~isempty(obj.repWindspeed_)
+                label = sprintf('%s   （%.1f m/s）', label, obj.repWindspeed_);
+            end
             set(obj.txt_condition_, 'String', label);
         end
 
