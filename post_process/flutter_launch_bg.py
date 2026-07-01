@@ -9,7 +9,9 @@ MATLAB 側は system() が返った時点で次の処理へ進める。
 （MATLAB の system() はコマンドライン引数を cp932 でエンコードするため
   日本語パスが化けるが、環境変数は正しく引き継がれる）
 
-エラーは <target_dir>/postprocess_error.log に書き出す（正常時は生成されない）。
+ログ（進捗 stdout + エラー stderr）は <target_dir>/postprocess_error.log に集約する。
+後処理の成否は flutter_analysis.py が最後に書く postprocess_done.marker /
+postprocess_failed.marker の有無で判定できる（done があれば完走）。
 """
 
 import sys
@@ -45,9 +47,12 @@ def main():
         stderr_dest = subprocess.DEVNULL
 
     try:
+        # stdout（[条件]/[LCO]/[完了] 等の進捗）も stderr と同じログへ集約する。
+        # これで「どこまで進んで正常終了したか」を1ファイルで追える。
+        stdout_dest = log_f if log_f is not None else subprocess.DEVNULL
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=stdout_dest,
             stderr=stderr_dest,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )

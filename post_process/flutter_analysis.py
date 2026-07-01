@@ -45,11 +45,13 @@ flutter_analysis.py  フラッター実験 後処理スクリプト
 """
 
 import argparse
+import datetime
 import json
 import math
 import os
 import re
 import sys
+import traceback
 import warnings
 
 import numpy as np
@@ -1249,9 +1251,11 @@ def plot_rms_overview_6axis(summaries, out_dir):
 # ============================================================
 #  メイン
 # ============================================================
-def main():
-    args = parse_args()
+def run(args):
+    """後処理の本体。処理対象の出力先ディレクトリを返す（完了マーカーの保存先）。
 
+    単一条件モードは条件フォルダ自身、一括処理モードは <base>_results を返す。
+    """
     # ---- 単一条件モード（--exp_dir） ----
     if args.exp_dir:
         exp_dir = args.exp_dir.rstrip("/\\")
@@ -1276,7 +1280,7 @@ def main():
             sys.exit(1)
         ofst = load_ofst_means(ofst_dir)
         process_one_condition(exp_dir, ofst, args)
-        return
+        return exp_dir
 
     # ---- 一括処理モード（--base_dir） ----
     base_dir = args.base_dir.rstrip("/\\")
@@ -1347,6 +1351,52 @@ def main():
             panel_data, map_dir, args, build_grid=build_speed_freq_grid)
 
     print(f"\n[完了] 結果を保存しました: {map_dir}")
+    return map_dir
+
+
+def _write_marker(target_dir, name, body):
+    """完了/失敗マーカーを target_dir に書き出す（書けなくても本処理は止めない）。"""
+    if not target_dir:
+        return
+    try:
+        with open(os.path.join(target_dir, name), "w", encoding="utf-8") as f:
+            f.write(body)
+    except OSError:
+        pass
+
+
+def main():
+    args = parse_args()
+
+    # マーカーの第一候補は起動時の対象ディレクトリ（--exp_dir / --base_dir）。
+    # run() が正常終了すれば返り値（実際の出力先）で上書きして完了マーカーを置く。
+    target_dir = (args.exp_dir or args.base_dir or "").rstrip("/\\")
+
+    # 前回の残骸マーカーを消してから開始（古い done/failed を誤読しないため）
+    for m in ("postprocess_done.marker", "postprocess_failed.marker"):
+        try:
+            os.remove(os.path.join(target_dir, m))
+        except OSError:
+            pass
+
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        out_dir = run(args)
+    except SystemExit as e:
+        # sys.exit(非0) は明示的な失敗として扱う（0/None は正常終了）
+        if e.code not in (0, None):
+            _write_marker(target_dir, "postprocess_failed.marker",
+                          f"[失敗] {ts}  exit code {e.code}\n")
+            raise
+        _write_marker(target_dir, "postprocess_done.marker", f"[完了] {ts}\n")
+        return
+    except BaseException:
+        _write_marker(target_dir, "postprocess_failed.marker",
+                      f"[失敗] {ts}\n{traceback.format_exc()}")
+        raise
+
+    _write_marker(out_dir or target_dir, "postprocess_done.marker",
+                  f"[完了] {ts}\n")
 
 
 if __name__ == "__main__":
