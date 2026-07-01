@@ -2,10 +2,11 @@
 %  ターミナルで指定した迎角へステージを移動するだけの単純なスクリプト
 %
 %  使い方:
-%    1. このスクリプトを実行
+%    1. このスクリプトを実行 → 起動時に自動でキャリブレーション（原点復帰）を行う
 %    2. プロンプトに迎角 [度] を入力（例: 15）
 %    3. 入力するたびにその迎角へ移動する
 %    4. "q" または空入力（何も入力せず Enter）でステージとの接続を切って終了
+%       ただし迎角が0°以外の状態で終了しようとすると警告が出て確認を求められる
 
 clc; clear;
 
@@ -22,15 +23,26 @@ end
 cfg = jsondecode(fileread(config_path));
 COM_PORT = cfg.qt_adl1_port;
 
-%% ---- 接続 ----
+%% ---- 接続・キャリブレーション ----
 stage = QT_ADL1(COM_PORT, [], cfg.origin_pulse);
 cleanupObj = onCleanup(@() delete(stage));
+
+fprintf('\n=== キャリブレーション（原点復帰）===\n');
+stage.homeReturn();
 
 %% ---- 迎角入力ループ ----
 fprintf('\n迎角 [度] を入力して Enter（"q" または空入力で切断・終了）\n');
 while true
     in = strtrim(input('迎角> ', 's'));
     if isempty(in) || strcmpi(in, 'q')
+        currentAngle = stage.getAngle();
+        if abs(currentAngle) > 1e-6
+            fprintf('  警告: 現在の迎角は %.4f° です（0° ではありません）\n', currentAngle);
+            confirm = strtrim(input('  このまま終了しますか？ [y/N]> ', 's'));
+            if ~strcmpi(confirm, 'y')
+                continue;
+            end
+        end
         break;
     end
 
