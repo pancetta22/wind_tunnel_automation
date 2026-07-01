@@ -802,7 +802,7 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
     全風速条件（panel_data）を風速軸に並べる。
 
     風速軸は代表風速（rep_U）ではなく、対象迎角における各計測点の平均風速
-    （spec_row["mean_U"] ＝ その点の _volt_raw.csv の平均差圧電圧から算出）を使う。
+    （spec_row["mean_U"] ＝ volt_summary の平均差圧電圧から算出）を使う。
     同一条件で target_aoa の計測点が複数（Pdata/Mdata 等）ある場合は mean_U も平均する。
     mean_U が NaN の条件は rep_U にフォールバックする。
 
