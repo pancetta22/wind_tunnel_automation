@@ -5,7 +5,7 @@
 %    1. このスクリプトを実行
 %    2. プロンプトに迎角 [度] を入力（例: 15）
 %    3. 入力するたびにその迎角へ移動する
-%    4. 空入力（何も入力せず Enter）で終了
+%    4. "q" または空入力（何も入力せず Enter）でステージとの接続を切って終了
 
 clc; clear;
 
@@ -24,16 +24,16 @@ stage = QT_ADL1(COM_PORT, [], cfg.origin_pulse);
 cleanupObj = onCleanup(@() delete(stage));
 
 %% ---- 迎角入力ループ ----
-fprintf('\n迎角 [度] を入力して Enter（空入力で終了）\n');
+fprintf('\n迎角 [度] を入力して Enter（"q" または空入力で切断・終了）\n');
 while true
-    in = input('迎角> ', 's');
-    if isempty(in)
+    in = strtrim(input('迎角> ', 's'));
+    if isempty(in) || strcmpi(in, 'q')
         break;
     end
 
     angle = str2double(in);
     if isnan(angle)
-        fprintf('  数値を入力してください\n');
+        fprintf('  数値を入力してください（"q" で切断・終了）\n');
         continue;
     end
 
@@ -41,4 +41,5 @@ while true
     fprintf('  現在の迎角: %.4f°\n', stage.getAngle());
 end
 
-fprintf('終了します\n');
+clear cleanupObj;  % onCleanup を明示的に発火させて delete(stage) を実行
+fprintf('ステージとの接続を切断しました\n');
