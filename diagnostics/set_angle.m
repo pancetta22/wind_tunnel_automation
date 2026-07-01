@@ -9,6 +9,9 @@
 
 clc; clear;
 
+% QT_ADL1 クラスは measurement_control フォルダにあるためパスを通す。
+addpath(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'measurement_control'));
+
 %% ---- 設定読み込み ----
 config_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), 'config.json');
 if ~isfile(config_path)
