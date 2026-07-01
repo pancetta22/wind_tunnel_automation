@@ -75,6 +75,10 @@ FS_TARGET   = 1200.0    # リサンプリング後のサンプリング周波数
 HEADER_ROWS = 4         # Leptrino CSV のヘッダ行数
 COL_NAMES   = ["t", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
 
+# ストローハル数 St = f·L/U 用の代表長さ（翼弦長 [m]）。
+# calc_force.py の c_chord と一致させる。
+REF_LENGTH_M = 0.20
+
 # RMSのみ追加で算出する成分（Fy/Mz は既存ブロックで処理済み）
 EXTRA_RMS_COMPS = ("Fx", "Fz", "Mx", "My")
 
@@ -131,26 +135,55 @@ def windspeed_params_from_log(log):
     }
 
 
-def mean_U_from_volt_raw(data_csv_path, ws_params):
-    """計測点の _volt_raw.csv から平均差圧電圧を求め、平均風速 [m/s] を返す。
+def load_volt_summary_means(exp_dir, date_str):
+    """条件フォルダの volt_summary.csv（Pdata/Mdata）から各点の平均差圧電圧を読む。
 
-    data_csv_path は 6軸CSV のパス。対応する _volt_raw.csv を同フォルダから探す。
-    ファイルが無い・電圧が読めない・rho 不明なら NaN を返す。
+    volt_summary.csv は flutter_run_experiment.m が各計測点の平均差圧電圧
+    （= _volt_raw.csv の平均）を書き出した正典。make_windspeed.py と同じ読み口
+    （列 name / 差圧電圧[mV]、BOM付きUTF-8）で読み、_volt_raw を点ごとに開き直さない。
+
+    Parameters
+    ----------
+    exp_dir  : str   条件フォルダ（volt_summary.csv が直下にある）
+    date_str : str   実験日 YYYYMMDD（ファイル名 <date>_<phase>_volt_summary.csv 用）
+
+    Returns
+    -------
+    dict  {short_name: mean_mV}   例 {"260608_Pdata_15.01": 1171.82, ...}
+          ファイルが無ければその phase 分は空。
+    """
+    means = {}
+    for phase in ("Pdata", "Mdata"):
+        fpath = os.path.join(exp_dir, f"{date_str}_{phase}_volt_summary.csv")
+        if not os.path.isfile(fpath):
+            continue
+        try:
+            df = pd.read_csv(fpath, encoding="utf-8-sig")
+        except Exception as e:
+            warnings.warn(f"volt_summary の読み込みに失敗: {fpath}（{e}）")
+            continue
+        if "name" not in df.columns or "差圧電圧[mV]" not in df.columns:
+            warnings.warn(f"volt_summary に想定列がありません: {fpath}")
+            continue
+        for _, row in df.iterrows():
+            try:
+                means[str(row["name"])] = float(row["差圧電圧[mV]"])
+            except (ValueError, TypeError):
+                continue
+    return means
+
+
+def mean_U_for_point(short_name, volt_means, ws_params):
+    """計測点の平均差圧電圧（volt_summary 由来）から平均風速 [m/s] を返す。
+
+    short_name（例 "260608_Pdata_15.01"）で volt_summary の平均電圧を引き、
+    mv_to_U で風速へ変換する。電圧が無い・rho 不明なら NaN を返す。
     """
     if ws_params is None or ws_params.get("rho") in (None, 0.0):
         return float("nan")
-
-    volt_path = re.sub(r"\.csv$", "_volt_raw.csv", data_csv_path)
-    if not os.path.isfile(volt_path):
+    mv_mean = volt_means.get(short_name)
+    if mv_mean is None:
         return float("nan")
-    try:
-        vdf = pd.read_csv(volt_path, encoding="utf-8")
-    except Exception:
-        return float("nan")
-    if "voltage_mV" not in vdf.columns or len(vdf) == 0:
-        return float("nan")
-
-    mv_mean = float(vdf["voltage_mV"].mean())
     return mv_to_U(mv_mean, ws_params["rho"], ws_params["water_density"],
                    ws_params["offset_mV"], ws_params["a"], ws_params["b"])
 
@@ -289,6 +322,13 @@ def dominant_freq(freqs, psd, fmin=1.0, fmax=500.0):
     return freqs[mask][idx]
 
 
+def strouhal(freq, U, L=REF_LENGTH_M):
+    """卓越周波数 freq [Hz]・風速 U [m/s]・代表長さ L [m] から St = f·L/U を返す。"""
+    if U is None or not np.isfinite(U) or U <= 0 or not np.isfinite(freq):
+        return np.nan
+    return freq * L / U
+
+
 def flutter_judge_A(rms, threshold):
     """ルートA: RMS が閾値を超えたらフラッター有。"""
     if threshold is None:
@@ -406,7 +446,7 @@ def find_ofst_key(data_fname, ofst, phase):
 #  1計測点の処理
 # ============================================================
 def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=None,
-                      ws_params=None):
+                      ws_params=None, volt_means=None):
     """1つの6軸CSVを処理して結果辞書を返す。
 
     Returns
@@ -514,9 +554,9 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
                 t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa,
                 case_name=case_name, rep_U=rep_U)
 
-    # ---- この計測点の平均風速（_volt_raw.csv の平均差圧電圧から算出） ----
+    # ---- この計測点の平均風速（volt_summary の平均差圧電圧から算出） ----
     # 代表風速（各条件の冒頭1点）ではなく、当該計測データ全体の平均を使う。
-    mean_U = mean_U_from_volt_raw(csv_path, ws_params)
+    mean_U = mean_U_for_point(short, volt_means or {}, ws_params)
 
     return {
         "ref_angle":    ref_angle,
@@ -531,6 +571,8 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
         **rms_extra,
         "freq_Fy":      freq_Fy,
         "freq_Mz":      freq_Mz,
+        "St_Fy":        strouhal(freq_Fy, mean_U),
+        "St_Mz":        strouhal(freq_Mz, mean_U),
         "flutter_A_Fy": f_A_Fy,
         "flutter_A_Mz": f_A_Mz,
         "flutter_B_Fy": f_B_Fy,
@@ -612,7 +654,7 @@ def process_one_condition(exp_dir, ofst, args):
     ofst_dir_log = log.get("ofst_dir", "")
     case_name = os.path.basename(exp_dir)
 
-    # 計測点ごとの平均風速を算出するためのパラメータ（各点の _volt_raw.csv から算出）
+    # 計測点ごとの平均風速を算出するためのパラメータ（volt_summary の平均電圧を使う）
     ws_params = windspeed_params_from_log(log)
 
     print(f"\n[条件] {case_name}  U ≈ {rep_U:.2f} m/s  ({rep_mv:.1f} mV)")
@@ -631,6 +673,12 @@ def process_one_condition(exp_dir, ofst, args):
         print(f"  [警告] Pdata/Mdata の CSV が見つかりません: {data_dir}")
         return None
 
+    # 条件フォルダの volt_summary.csv（Pdata/Mdata）から各点の平均差圧電圧を一括読み。
+    # date_str はデータファイル名の先頭 YYYYMMDD から取る（log["date"] は YYMMDD のことがある）。
+    m_date = re.match(r"(\d{8})_", files[0])
+    date_str = m_date.group(1) if m_date else str(log.get("date", ""))
+    volt_means = load_volt_summary_means(exp_dir, date_str)
+
     # LCO解析は遅延 import（lco_analysis が flutter_analysis を import するため、
     # トップレベル import だと循環参照になる。--lco 時のみ読み込む）
     if args.lco:
@@ -643,7 +691,8 @@ def process_one_condition(exp_dir, ofst, args):
         phase = "Pdata" if "_Pdata_" in fname else "Mdata"
         result = process_one_point(
             os.path.join(data_dir, fname), ofst, phase, args, fig_dir,
-            case_name=case_name, rep_U=rep_U, ws_params=ws_params
+            case_name=case_name, rep_U=rep_U, ws_params=ws_params,
+            volt_means=volt_means
         )
         if result is not None:
             # スペクトル配列は DataFrame に混ぜず別リストへ退避
