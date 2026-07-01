@@ -732,6 +732,9 @@ def process_one_condition(exp_dir, ofst, args):
     if spec_rows:
         plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args, case_name=case_name)
 
+    # St–迎角プロット（この1風速条件でのストローハル数の迎角依存）
+    plot_strouhal_aoa(df, exp_dir, rep_U, args, case_name=case_name)
+
     # LCO: 迎角に沿った位相図スイープ（--lco 時のみ）
     if args.lco and lco_rows:
         lco_analysis.plot_phase_sweep(lco_rows, exp_dir, rep_U, args)
@@ -859,6 +862,68 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
             peak_freq.append(f_plot[np.argmax(col)])
 
     return u_axis, f_plot, Z_db, peak_u, peak_freq
+
+
+def plot_strouhal_aoa(df, exp_dir, rep_U, args, case_name=""):
+    """1風速条件について、横軸=迎角・縦軸=St のプロットを描く。
+
+    ストローハル数の迎角依存を見る図。St が迎角に対して概ね一定なら流れ律速
+    （渦放出）、特定の迎角域で急変・張り付きがあれば構造の固有振動数への
+    ロックイン／フラッターが疑われる。Fy/Mz を同一軸に重ね描きする。
+
+    df: process_one_condition が返す DataFrame（aoa 昇順、St_Fy/St_Mz と
+        flutter_A_Fy/flutter_A_Mz を含む）。横軸は df["aoa"]。
+    """
+    case_name = case_name or os.path.basename(exp_dir)
+    if df is None or "aoa" not in df.columns:
+        return
+    if "St_Fy" not in df.columns and "St_Mz" not in df.columns:
+        return
+
+    fig, ax = plt.subplots(figsize=(11, 6.5))
+
+    for st_col, flut_col, comp, color in [
+        ("St_Fy", "flutter_A_Fy", "Fy", "tab:blue"),
+        ("St_Mz", "flutter_A_Mz", "Mz", "tab:orange"),
+    ]:
+        if st_col not in df.columns:
+            continue
+        valid = df["aoa"].notna() & df[st_col].notna()
+        if not valid.any():
+            continue
+        aoa = df.loc[valid, "aoa"].values
+        st  = df.loc[valid, st_col].values
+
+        # 迎角順に線でつなぎ、傾向（一定か張り付きか）を見やすくする
+        order = np.argsort(aoa)
+        ax.plot(aoa[order], st[order], color=color, lw=1.2, alpha=0.7,
+                zorder=2, label=f"{comp}")
+
+        # フラッター判定（Route A）有の点だけ赤×を重ねる
+        if flut_col in df.columns:
+            flag = pd.to_numeric(df.loc[valid, flut_col], errors="coerce").values
+            idx_yes = flag == 1
+            ax.scatter(aoa[idx_yes], st[idx_yes], marker="x", s=70,
+                       color="red", zorder=4, label="_")
+        ax.scatter(aoa, st, marker="o", s=28, color=color,
+                   zorder=3, label="_")
+
+    # 凡例用ダミー（フラッター印）
+    ax.scatter([], [], marker="x", color="red", label="Flutter (Route A)")
+
+    ax.set_xlabel("Angle of attack [deg]", fontsize=13)
+    ax.set_ylabel("Strouhal number  St = f·L/U", fontsize=13)
+    ax.set_ylim(bottom=0)
+    ax.set_title(f"St vs AoA   {case_name}   "
+                 f"U ≈ {rep_U:.2f} m/s   (L = {REF_LENGTH_M:g} m)",
+                 fontsize=13)
+    ax.legend(fontsize=10, loc="best")
+    ax.grid(True, alpha=0.4)
+
+    fname = "strouhal_aoa.png"
+    fig.savefig(os.path.join(exp_dir, fname), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [マップ] {fname} を保存しました")
 
 
 def plot_aoa_freq_map(spec_rows, exp_dir, rep_U, args, case_name=""):
