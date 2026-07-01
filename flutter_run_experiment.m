@@ -133,16 +133,17 @@ while true
     fprintf('  風速条件 %s の計測\n', cond_label);
     fprintf('========================================\n\n');
 
-    % ---- ブロワー起動・風速安定の確認 ----
-    input(sprintf('ブロワーを起動し、風速が安定したら Enter を押してください: '), 's');
-    fprintf('\n');
-
-    % ---- 代表風速計測の前に迎角を 0° に戻す ----
-    % （直前の Mofst フェーズで -max_angle° に取り残されているため）
-    fprintf('[代表風速計測] 迎角を 0° に戻しています...\n');
+    % ---- ブロワー起動前に迎角を 0° に戻す ----
+    % （前条件の Mdata フェーズ等で 0° 以外に取り残されている可能性があるため、
+    %   「風速が安定したら Enter」の表示時点では常に 0° にしておく）
+    fprintf('[準備] 迎角を 0° に戻しています...\n');
     stage.moveToAngle(0);
     fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
     pause(cfg.angle_settle_sec);
+
+    % ---- ブロワー起動・風速安定の確認 ----
+    input(sprintf('ブロワーを起動し、風速が安定したら Enter を押してください: '), 's');
+    fprintf('\n');
 
     % ---- 代表風速の自動計測 ----
     [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met);
@@ -408,6 +409,14 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
         fprintf('[保存] %s\n', fname_force);
         fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
     end
+
+    % フェーズ終了後に迎角を 0° に戻す
+    % （Mdata は -max_angle° で終わるため、次条件の「風速安定確認」時点を
+    %   常に 0° にしておくために必要）
+    fprintf('[復帰] 迎角を 0° に戻しています...\n');
+    stage.moveToAngle(0);
+    fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+    pause(cfg.angle_settle_sec);
 
     fprintf('--- %s フェーズ完了 ---\n\n', phase);
 end
