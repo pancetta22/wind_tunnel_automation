@@ -13,6 +13,7 @@ function run_postprocess(exp_dir, cfg)
 %  ※ run_experiment の実験完了時にも、この関数が内部的に呼ばれる（後処理の本体）。
 
 root = fileparts(mfilename('fullpath'));
+addpath(fullfile(root, 'measurement_control'));
 
 % --- 引数・設定 ---------------------------------------------------------
 if nargin < 1 || isempty(exp_dir)
@@ -46,7 +47,7 @@ if isempty(py64)
     fprintf('         python_exe (%s) で後処理を試みます。\n\n', cfg.python_exe);
     py64 = cfg.python_exe;
 end
-venv_python = setup_postprocess_venv_(root, py64);
+venv_python = setup_postprocess_venv(root, py64);
 
 % --- Step 1: 力計測の後処理（windspeed → 空力係数・グラフ）-----------------
 %   force_measurement.py が make_windspeed と calc_force を順に実行し、
@@ -260,85 +261,5 @@ function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
     else
         fprintf('[輪郭抽出] 失敗しました（終了コード %d）。\n', st_ex);
         fprintf('  HSV閾値の調整が必要な場合があります（picture/control.csv で調整）。\n\n');
-    end
-end
-
-
-function venv_python = setup_postprocess_venv_(root, python_exe_64)
-    % post_process/venv を用意して venv の python パスを返す。
-    %   1. venv が無ければ 64bit Python で作成 → requirements をインストール
-    %   2. 既存 venv のパッケージが足りなければ再インストール
-    %   3. それでも直らなければ venv フォルダを自動削除して作り直す
-    %  → 半端な venv / 32bit で作られた古い venv でも自動で復旧する。
-
-    venv_dir = fullfile(root, 'post_process', 'venv');
-    req_path = fullfile(root, 'post_process', 'requirements.txt');
-
-    if ispc
-        venv_python = fullfile(venv_dir, 'Scripts', 'python.exe');
-    else
-        venv_python = fullfile(venv_dir, 'bin', 'python');
-    end
-
-    % 1回目: 既存 venv で試す / 2回目: 削除して作り直して試す
-    for attempt = 1:2
-
-        % --- 2回目は venv フォルダを丸ごと削除してから作り直す ---
-        if attempt == 2
-            fprintf('[後処理] venv が正常に使えないため、削除して作り直します...\n');
-            if isfolder(venv_dir)
-                try
-                    rmdir(venv_dir, 's');
-                catch ME
-                    error(['[後処理] venv フォルダを削除できませんでした: %s\n' ...
-                           '  手動で次を削除してください: %s'], ME.message, venv_dir);
-                end
-            end
-        end
-
-        % --- venv 本体が無ければ作成 ---
-        if ~isfile(venv_python)
-            fprintf('[後処理] 仮想環境を作成しています（64bit Python）: %s\n', venv_dir);
-            fprintf('         使用 Python: %s\n', python_exe_64);
-            [st, out] = system(sprintf('"%s" -m venv "%s"', python_exe_64, venv_dir));
-            if ~isempty(strtrim(out)), fprintf('%s\n', out); end
-            if st ~= 0 || ~isfile(venv_python)
-                if attempt == 1, continue; end   % 作成失敗 → 作り直しへ
-                error(['[後処理] 仮想環境の作成に失敗しました（終了コード %d）。\n' ...
-                       '  config.json の "python_exe_64" に 64bit Python(.exe) の正しいパスを設定してください。\n' ...
-                       '  指定値: %s'], st, python_exe_64);
-            end
-        end
-
-        % --- 主要パッケージが導入済みか確認（pip show は引用符問題が無く安全）---
-        [s_pd, ~] = system(sprintf('"%s" -m pip show pandas',      venv_python));
-        [s_px, ~] = system(sprintf('"%s" -m pip show python-pptx', venv_python));
-        if s_pd == 0 && s_px == 0
-            return   % 正常 → そのまま使う
-        end
-
-        % --- 不足 → pip でインストール ---
-        fprintf('[後処理] 必要パッケージをインストールしています...\n');
-        system(sprintf('"%s" -m pip install --upgrade pip -q', venv_python));
-        [~, out] = system(sprintf('"%s" -m pip install -r "%s"', venv_python, req_path));
-        if ~isempty(strtrim(out)), fprintf('%s\n', out); end
-
-        % --- インストール後の再確認 ---
-        [s_pd2, ~] = system(sprintf('"%s" -m pip show pandas',      venv_python));
-        [s_px2, ~] = system(sprintf('"%s" -m pip show python-pptx', venv_python));
-        if s_pd2 == 0 && s_px2 == 0
-            fprintf('[後処理] パッケージのセットアップ完了。\n\n');
-            return   % 正常
-        end
-
-        % --- まだダメ ---
-        if attempt == 1
-            fprintf('[後処理] 既存 venv では復旧できませんでした。作り直します。\n');
-            % continue（次の attempt で削除→再作成）
-        else
-            error(['[後処理] venv を作り直してもパッケージを導入できませんでした。\n' ...
-                   '  64bit Python のパス（python_exe_64）と pip のネットワーク接続を確認してください。\n' ...
-                   '  Python: %s'], python_exe_64);
-        end
     end
 end

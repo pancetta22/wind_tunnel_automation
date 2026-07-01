@@ -130,6 +130,21 @@ k [Pa/mV] = U² × ρ / (2 × V)
 `flutter_run_experiment.m` で取得したフラッター実験データ（`_ofst` / `_cXX` 構成）を
 解析する。RMS・Welch PSD・卓越周波数・迎角×周波数マップ・フラッター発生マップを出力。
 
+### 自動実行（`flutter_run_experiment` 実行時）
+
+**手動操作は不要。** `flutter_run_experiment` を使うと後処理は自動で走る（`flutter_run_postprocess.m` 経由、いずれも **`--lco` 付き**）：
+
+1. **各風速条件（`_cXX`）の計測が終わるたび**に `--exp_dir` でその条件だけ随時解析
+   （早く結果が見られる）
+2. **全条件の計測完了後**に `--base_dir` で全条件横断のフラッター発生マップ・
+   RMS一覧などを生成
+
+後処理が失敗しても計測は止まらない（warning を表示して続行）。venv は
+`run_postprocess` と共通の `setup_postprocess_venv.m` が用意する（`post_process/venv`
+または既存 `.venv` を自動利用）。
+
+### 手動で実行したい場合
+
 ```bash
 # 全風速条件を一括処理
 python flutter_analysis.py --base_dir C:/WindyData/260624_flutter
