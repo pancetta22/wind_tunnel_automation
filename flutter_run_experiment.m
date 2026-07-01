@@ -552,6 +552,13 @@ function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
 
     samples = zeros(1, 200);
     n = 0;
+
+    % デジボルの詰まり対策（data フェーズと同じ）：
+    %   溜まった古い応答を捨て、短いタイムアウト＋ポーリング間隔で読む。
+    %   これを行わないと直前フェーズ（無風 ofst 等）の古い mV を平均に混ぜてしまう。
+    flush(s_volt, 'input');
+    prev_timeout = s_volt.Timeout;
+    s_volt.Timeout = 0.8;
     t_end = tic;
 
     while toc(t_end) < MEAS_SEC
@@ -567,9 +574,11 @@ function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
                 samples(n) = v_mv;
                 fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
             end
+            pause(0.1);
         catch
         end
     end
+    s_volt.Timeout = prev_timeout;
     fprintf('\n');
 
     if n == 0
@@ -668,6 +677,12 @@ function offset_mV = measure_volt_offset_(s_volt)
     fprintf('[オフセット計測] 無風時の差圧電圧を %.0f 秒間計測します...\n', MEAS_SEC);
     samples = zeros(1, 200);
     n = 0;
+
+    % デジボルの詰まり対策（data フェーズと同じ）：溜まった古い応答を捨て、
+    % 短いタイムアウト＋ポーリング間隔で読む。
+    flush(s_volt, 'input');
+    prev_timeout = s_volt.Timeout;
+    s_volt.Timeout = 0.8;
     t_end = tic;
     while toc(t_end) < MEAS_SEC
         try
@@ -680,9 +695,11 @@ function offset_mV = measure_volt_offset_(s_volt)
                 samples(n) = v_mv;
                 fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
             end
+            pause(0.1);
         catch
         end
     end
+    s_volt.Timeout = prev_timeout;
     fprintf('\n');
     if n == 0
         warning('[オフセット計測] サンプルを取得できませんでした。');
