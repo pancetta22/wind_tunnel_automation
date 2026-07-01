@@ -38,7 +38,7 @@ while true
         currentAngle = stage.getAngle();
         if abs(currentAngle) > 1e-6
             fprintf('  警告: 現在の迎角は %.4f° です（0° ではありません）\n', currentAngle);
-            confirm = strtrim(input('  このまま終了しますか？ [y/N]> ', 's'));
+            confirm = strtrim(input('  このまま終了しますか？ [y/n]> ', 's'));
             if ~strcmpi(confirm, 'y')
                 continue;
             end
