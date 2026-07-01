@@ -1,21 +1,18 @@
-function ok = flutter_run_postprocess(target_dir, mode, cfg)
+function flutter_run_postprocess(target_dir, mode, cfg)
 %% flutter_run_postprocess.m
-% フラッター実験の後処理（flutter_analysis.py）を実行する。
-%   LCO 非線形解析（--lco）付きで実行する。
+% フラッター実験の後処理（flutter_analysis.py）をバックグラウンドで実行する。
+%   LCO 非線形解析（--lco）付き。完了を待たずにすぐ返るため実験を止めない。
 %
 % 使い方:
 %   flutter_run_postprocess(cond_dir, 'exp',  cfg)   % 単一条件（_cXX）を随時解析
 %   flutter_run_postprocess(base_dir, 'base', cfg)   % 全条件の横断マップを生成
 %
-%   mode:
-%     'exp'  → flutter_analysis.py --exp_dir  <target_dir> --lco
-%     'base' → flutter_analysis.py --base_dir <target_dir> --lco
-%
-% 失敗しても実験は止めない（warning のみ）。戻り値 ok は成功可否（true/false）。
-% venv の準備は setup_postprocess_venv（run_postprocess と共通）に委譲する。
+% post_process/flutter_launch_bg.py をランチャーとして使う。
+% ランチャーが subprocess.Popen で flutter_analysis.py を切り離して起動し
+% 即終了するため、MATLAB は完了を待たずに次へ進める。
+% エラーは <target_dir>/postprocess_error.log に出力される（正常時は生成されない）。
 
-    ok = false;
-    root = fileparts(fileparts(mfilename('fullpath')));   % リポジトリルート
+    root = fileparts(fileparts(mfilename('fullpath')));
 
     if nargin < 2 || isempty(mode), mode = 'exp'; end
     if nargin < 3 || isempty(cfg)
@@ -35,23 +32,18 @@ function ok = flutter_run_postprocess(target_dir, mode, cfg)
     if ~isfield(cfg, 'python_exe_64'), cfg.python_exe_64 = ''; end
     if ~isfield(cfg, 'python_exe'),    cfg.python_exe    = ''; end
 
-    switch lower(mode)
-        case 'exp'
-            arg_flag = '--exp_dir';
-        case 'base'
-            arg_flag = '--base_dir';
-        otherwise
-            warning('[後処理] 未知の mode: %s（''exp'' または ''base''）', mode);
-            return
-    end
-
-    fa_path = fullfile(root, 'post_process', 'flutter_analysis.py');
-    if ~isfile(fa_path)
-        warning('[後処理] flutter_analysis.py が見つかりません: %s', fa_path);
+    if ~any(strcmpi(mode, {'exp', 'base'}))
+        warning('[後処理] 未知の mode: %s', mode);
         return
     end
 
-    % --- venv の準備（失敗しても実験は止めない）---
+    launcher = fullfile(root, 'post_process', 'flutter_launch_bg.py');
+    if ~isfile(launcher)
+        warning('[後処理] flutter_launch_bg.py が見つかりません: %s', launcher);
+        return
+    end
+
+    % --- venv の準備 ---
     py64 = cfg.python_exe_64;
     if isempty(py64)
         fprintf('[後処理] python_exe_64 が未設定のため python_exe で試みます。\n');
@@ -65,17 +57,22 @@ function ok = flutter_run_postprocess(target_dir, mode, cfg)
         return
     end
 
-    % --- flutter_analysis.py の実行（--lco 付き）---
-    fprintf('[後処理] フラッター解析を実行中（%s, --lco）...\n', arg_flag);
-    fprintf('         対象: %s\n', target_dir);
-    cmd = sprintf('"%s" "%s" %s "%s" --lco', venv_python, fa_path, arg_flag, target_dir);
+    % --- ランチャー経由でバックグラウンド起動 ---
+    % MATLAB の system() はコマンドライン引数を cp932 でエンコードするため、
+    % 日本語パスが Python 側で文字化けする。環境変数経由で渡すことで回避する。
+    setenv('WINDY_BG_TARGET', target_dir);
+    setenv('WINDY_BG_MODE',   mode);
+    cmd = sprintf('"%s" "%s"', venv_python, launcher);
     [st, out] = system(cmd);
-    if ~isempty(strtrim(out)), fprintf('%s\n', out); end
+    setenv('WINDY_BG_TARGET', '');
+    setenv('WINDY_BG_MODE',   '');
+    if ~isempty(strtrim(out)), fprintf('%s\n', strtrim(out)); end
 
     if st == 0
-        fprintf('[後処理] フラッター解析が完了しました。\n\n');
-        ok = true;
+        fprintf('[後処理] バックグラウンドで解析を開始しました（--%s, --lco）\n', mode);
+        fprintf('         対象: %s\n', target_dir);
+        fprintf('         失敗時ログ: %s\n\n', fullfile(target_dir, 'postprocess_error.log'));
     else
-        warning('[後処理] flutter_analysis.py に失敗しました（終了コード %d）。実験は続行します。', st);
+        warning('[後処理] ランチャーの起動に失敗しました（終了コード %d）。実験は続行します。', st);
     end
 end
