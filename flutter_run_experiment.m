@@ -164,6 +164,9 @@ while true
     cond_log_path = fullfile(cond_dir, sprintf('%s_experiment_log.json', date_str));
     save_flutter_log_(cond_log_path, date_str, met_cond);
 
+    % ---- 計測前の挙動確認（任意迎角への移動、データ取得なし）----
+    manual_angle_check_(stage, max_angle, cfg);
+
     % ---- Pdata ----
     monitor.setConditionLabel(cond_label);
     monitor.setTimeLimitSec(measure_sec);
@@ -298,6 +301,12 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
         fprintf('[保存] %s\n', fname_force);
         fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
     end
+
+    % フェーズ終了後に迎角を 0° に戻す
+    fprintf('[復帰] 迎角を 0° に戻しています...\n');
+    stage.moveToAngle(0);
+    fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+    pause(cfg.angle_settle_sec);
 
     fprintf('--- %s フェーズ完了 ---\n\n', phase);
 end
@@ -801,6 +810,13 @@ function manual_angle_check_(stage, max_angle, cfg)
             break;
         end
     end
+
+    % 確認終了後は必ず迎角を 0° に戻す（後続の代表風速計測・計測を常に0°始まりにするため）
+    fprintf('[復帰] 迎角を 0° に戻しています...\n');
+    stage.moveToAngle(0);
+    fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+    pause(cfg.angle_settle_sec);
+
     fprintf('--- 任意迎角への移動 完了 ---\n\n');
 end
 
