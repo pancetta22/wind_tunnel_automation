@@ -278,7 +278,7 @@ def drift():
                 )
             elif "Pdata" in data.loc[i, "name"] and data.loc[i, "name"].endswith("00.00.csv"):
                 Pdata = np.append(Pdata, [data.loc[i, :]], axis=0)
-                Pdata[len(Pdata) - 1, 1:] = Mdata[0, 4:]
+                Pdata[len(Pdata) - 1, 1:] = Mdata[0, 1:]
             elif "Pdata" in data.loc[i, "name"] and data.loc[i, "name"].endswith("01.csv"):
                 Pdata = np.append(Pdata, [data.loc[i, :]], axis=0)
                 Pdata[len(Pdata) - 1, 1:] = (
@@ -332,7 +332,10 @@ def calc():
     _C6 = ["Fx", "Fy", "Fz", "Mx", "My", "Mz"]
     Pdata[_C6] = Pdata[_C6].astype(float) - Pofst[_C6].astype(float)
     Mdata[_C6] = Mdata[_C6].astype(float) - Mofst[_C6].astype(float)
-    data = pd.concat([Mdata.iloc[::-1], Pdata], ignore_index=True)
+    # 片側のみの計測では空の DataFrame を除外して結合する
+    # （空を含む concat は新しい pandas で FutureWarning → 将来動作が変わるため）
+    frames = [df for df in (Mdata.iloc[::-1], Pdata) if not df.empty]
+    data = pd.concat(frames, ignore_index=True)
 
     # 空力中心まわり
     _CF = ["Fx", "Fy", "Fz"]
@@ -549,8 +552,8 @@ def plot_PM():
     mk = 8
 
     # data = [Mdata_reversed, Pdata] で両者は同数。先半分が負迎角、後半分が正迎角。
-    n = len(data) // 2   # = max_angle + 1
-    max_aoa = n - 1
+    n = len(data) // 2   # = 片側の点数
+    max_aoa = int(np.nanmax(np.abs(data["AoA"])))   # 実際の最大迎角（刻み幅≠1°でも正しい）
     pos = data.loc[n:].reset_index(drop=True)   # 正迎角 (AoA 0 〜 max)
     neg = data.loc[:n - 1].reset_index(drop=True)  # 負迎角 (AoA -max 〜 0, 反転済み)
 
@@ -628,7 +631,14 @@ def report_zero_lift():
         return
 
     p      = np.polyfit(sub["AoA"], sub["Cl"], 1)   # p[0]=slope, p[1]=intercept
-    alpha0 = -p[1] / p[0]                            # Cl=0 となる AoA [度]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        alpha0 = -p[1] / p[0]                        # Cl=0 となる AoA [度]
+    if not np.isfinite(alpha0):
+        # 傾きが 0 や NaN（q=0 で Cl が全て NaN 等）だと α0 を決められない。
+        # ここで落とすと後処理全体が失敗扱いになるため、レポートだけスキップする。
+        print("[report_zero_lift] Cl の傾きから α0 を推定できません"
+              "（傾き 0 または NaN）。スキップします。")
+        return
     Cl_at0 = float(np.polyval(p, 0))
 
     correction = round(alpha0 * PULSE_PER_DEG)
