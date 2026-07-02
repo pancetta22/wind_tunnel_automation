@@ -285,16 +285,21 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
         end
 
         flush(s_volt, 'input');
+        prev_timeout = s_volt.Timeout;
         s_volt.Timeout = 0.8;
         voltages = zeros(1, 500);
         nv = 0;
+        n_consec_fail = 0;
 
         while ~logger.isDone()
             try
                 writeline(s_volt, 'MD?');
                 raw  = readline(s_volt);
                 v_mv = str2double(strtrim(raw)) * 1000;
-                if ~isnan(v_mv)
+                if isnan(v_mv)
+                    n_consec_fail = n_consec_fail + 1;
+                else
+                    n_consec_fail = 0;
                     nv = nv + 1;
                     if nv > numel(voltages)
                         voltages = [voltages, zeros(1, 200)]; %#ok<AGROW>
@@ -308,11 +313,15 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
                                   'size_kb', sz_kb, 'limit_kb', cfg.force_sensor_size_limit_kb);
                     monitor.update(pt.target_angle, v_mv, prog);
                 end
-                pause(0.1);
             catch
+                n_consec_fail = n_consec_fail + 1;
             end
+            if n_consec_fail == 30
+                warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+            end
+            pause(0.1);
         end
-        s_volt.Timeout = cfg.r6441b_timeout_sec;
+        s_volt.Timeout = prev_timeout;
         voltages = voltages(1:nv);
         fprintf('\n');
 
@@ -378,16 +387,21 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
         end
 
         flush(s_volt, 'input');
+        prev_timeout = s_volt.Timeout;
         s_volt.Timeout = 0.8;
         voltages = zeros(1, 2000);
         nv = 0;
+        n_consec_fail = 0;
 
         while ~logger.isDone()
             try
                 writeline(s_volt, 'MD?');
                 raw  = readline(s_volt);
                 v_mv = str2double(strtrim(raw)) * 1000;
-                if ~isnan(v_mv)
+                if isnan(v_mv)
+                    n_consec_fail = n_consec_fail + 1;
+                else
+                    n_consec_fail = 0;
                     nv = nv + 1;
                     if nv > numel(voltages)
                         voltages = [voltages, zeros(1, 500)]; %#ok<AGROW>
@@ -401,11 +415,15 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
                                   'elapsed_sec', elapsed, 'limit_sec', measure_sec);
                     monitor.update(pt.target_angle, v_mv, prog);
                 end
-                pause(0.1);
             catch
+                n_consec_fail = n_consec_fail + 1;
             end
+            if n_consec_fail == 30
+                warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+            end
+            pause(0.1);
         end
-        s_volt.Timeout = cfg.r6441b_timeout_sec;
+        s_volt.Timeout = prev_timeout;
         voltages = voltages(1:nv);
         fprintf('\n');
 
@@ -567,40 +585,68 @@ function pts = build_flutter_sequence_(phase, max_angle, angle_step)
     end
 end
 
-function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
-    MEAS_SEC = 5;
-    fprintf('[代表風速計測] %.0f 秒間計測中...\n', MEAS_SEC);
+function [samples, n] = sample_voltage_mv_(s_volt, duration_sec, timeout_sec, show_progress)
+    % 一定秒数、R6441B から差圧電圧 [mV] を繰り返し読み取って配列で返す。
+    % measure_volt_offset_ / measure_representative_windspeed_ の共通処理。
+    %
+    % デジボルの詰まり対策：溜まった古い応答を捨て、短いタイムアウト＋
+    % ポーリング間隔で読む（これを行わないと直前フェーズの古い mV を
+    % 平均に混ぜてしまう）。読み取り失敗（writeline/readline 例外や
+    % NaN パース）が連続する場合は、原因不明のまま無限に握りつぶさない
+    % よう一定回数ごとに警告を出す。
+    if nargin < 3 || isempty(timeout_sec), timeout_sec = 0.8; end
+    if nargin < 4, show_progress = true; end
+
+    CONSEC_FAIL_WARN = 30;  % 連続失敗がこの回数を超えたら警告（0.1s間隔で約3秒相当）
 
     samples = zeros(1, 200);
     n = 0;
+    n_consec_fail = 0;
 
-    % デジボルの詰まり対策（data フェーズと同じ）：
-    %   溜まった古い応答を捨て、短いタイムアウト＋ポーリング間隔で読む。
-    %   これを行わないと直前フェーズ（無風 ofst 等）の古い mV を平均に混ぜてしまう。
     flush(s_volt, 'input');
     prev_timeout = s_volt.Timeout;
-    s_volt.Timeout = 0.8;
+    s_volt.Timeout = timeout_sec;
     t_end = tic;
 
-    while toc(t_end) < MEAS_SEC
+    while toc(t_end) < duration_sec
         try
             writeline(s_volt, 'MD?');
             raw  = readline(s_volt);
             v_mv = str2double(strtrim(raw)) * 1000;
-            if ~isnan(v_mv)
+            if isnan(v_mv)
+                n_consec_fail = n_consec_fail + 1;
+            else
+                n_consec_fail = 0;
                 n = n + 1;
                 if n > numel(samples)
                     samples = [samples, zeros(1, 100)]; %#ok<AGROW>
                 end
                 samples(n) = v_mv;
-                fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
+                if show_progress
+                    fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
+                end
             end
-            pause(0.1);
         catch
+            n_consec_fail = n_consec_fail + 1;
         end
+
+        if n_consec_fail == CONSEC_FAIL_WARN
+            warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+        end
+
+        pause(0.1);
     end
     s_volt.Timeout = prev_timeout;
-    fprintf('\n');
+    if show_progress, fprintf('\n'); end
+
+    samples = samples(1:n);
+end
+
+function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
+    MEAS_SEC = 5;
+    fprintf('[代表風速計測] %.0f 秒間計測中...\n', MEAS_SEC);
+
+    [samples, n] = sample_voltage_mv_(s_volt, MEAS_SEC);
 
     if n == 0
         warning('[代表風速計測] サンプルを取得できませんでした。0 mV として扱います。');
@@ -609,7 +655,7 @@ function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
         return;
     end
 
-    rep_mv = mean(samples(1:n));
+    rep_mv = mean(samples);
 
     offset_mV  = cfg.volt_offset_mV;
     a          = cfg.calib_a;
@@ -696,38 +742,15 @@ end
 function offset_mV = measure_volt_offset_(s_volt)
     MEAS_SEC = 5;
     fprintf('[オフセット計測] 無風時の差圧電圧を %.0f 秒間計測します...\n', MEAS_SEC);
-    samples = zeros(1, 200);
-    n = 0;
 
-    % デジボルの詰まり対策（data フェーズと同じ）：溜まった古い応答を捨て、
-    % 短いタイムアウト＋ポーリング間隔で読む。
-    flush(s_volt, 'input');
-    prev_timeout = s_volt.Timeout;
-    s_volt.Timeout = 0.8;
-    t_end = tic;
-    while toc(t_end) < MEAS_SEC
-        try
-            writeline(s_volt, 'MD?');
-            raw  = readline(s_volt);
-            v_mv = str2double(strtrim(raw)) * 1000;
-            if ~isnan(v_mv)
-                n = n + 1;
-                if n > numel(samples), samples = [samples, zeros(1, 100)]; end %#ok<AGROW>
-                samples(n) = v_mv;
-                fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
-            end
-            pause(0.1);
-        catch
-        end
-    end
-    s_volt.Timeout = prev_timeout;
-    fprintf('\n');
+    [samples, n] = sample_voltage_mv_(s_volt, MEAS_SEC);
+
     if n == 0
         warning('[オフセット計測] サンプルを取得できませんでした。');
         offset_mV = NaN;
         return;
     end
-    offset_mV = mean(samples(1:n));
+    offset_mV = mean(samples);
     fprintf('  → 電圧オフセット = %+.4f mV  (%d サンプル)\n\n', offset_mV, n);
 end
 
