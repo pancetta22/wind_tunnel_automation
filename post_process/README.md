@@ -27,8 +27,8 @@
 | `make_comparison.py`         | 過去剛体翼との比較パワポを生成（WindyData を走査＋同梱過去分）        |
 | `make_windspeed.py`          | 差圧電圧サマリー → `windspeed.csv`（force_measurement が呼ぶ）        |
 | `calc_force.py`              | 6軸力 → 空力係数（force_measurement が呼ぶ）                          |
-| `flutter_analysis.py`        | **フラッター実験 後処理 入口**。RMS・PSD・迎角×周波数マップ・フラッター発生マップ |
-| `lco_analysis.py`            | フラッターの LCO 非線形解析（位相図・Poincaré・分岐図ほか）。`--lco` で有効化 |
+| `flutter_analysis.py`        | **フラッター実験 後処理 入口**。→ [FLUTTER_README.md](FLUTTER_README.md) |
+| `lco_analysis.py`            | フラッターの LCO 非線形解析。`--lco` で有効化 → [FLUTTER_README.md](FLUTTER_README.md) |
 | `LCO_ANALYSIS_GUIDE.md`      | LCO 解析の図・指標の読み方ガイド（応答タイプ早見表つき）              |
 | `naca0012.csv`               | 翼型輪郭抽出の参照翼型                                                |
 | `assets/`                    | 比較の同梱資産（`aero_data/`＝過去データ・テンプレ pptx・`archive/`） |
@@ -128,47 +128,13 @@ post_process\venv\Scripts\python post_process\force_measurement.py <実験フォ
 
 ---
 
-## フラッター実験の後処理（`flutter_analysis.py`）
+## フラッター実験の後処理
 
-`flutter_run_experiment.m` で取得したフラッター実験データ（`_ofst` / `_cXX` 構成）を
-解析する。RMS・Welch PSD・卓越周波数・迎角×周波数マップ・フラッター発生マップを出力。
-
-### 自動実行（`flutter_run_experiment` 実行時）
-
-**手動操作は不要。** `flutter_run_experiment` を使うと後処理は自動で走る（`flutter_run_postprocess.m` 経由）：
-
-1. **各風速条件（`_cXX`）の計測が終わるたび**に `--exp_dir` でその条件だけ随時解析
-   （早く結果が見られる。計測中に重い LCO 解析を走らせないよう **`--lco` は付けない**）
-2. **全条件の計測完了後**に `--base_dir` で全条件横断のフラッター発生マップ・
-   RMS一覧などを生成（こちらは **`--lco` 付き**）
-
-後処理が失敗しても計測は止まらない（warning を表示して続行）。venv は
-`run_postprocess` と共通の `setup_postprocess_venv.m` が用意する（`post_process/venv`
-または既存 `.venv` を自動利用）。
-
-### 手動で実行したい場合
-
-```bash
-# 全風速条件を一括処理
-python flutter_analysis.py --base_dir C:/WindyData/260624_flutter
-# 1条件だけ（途中確認用）
-python flutter_analysis.py --exp_dir C:/WindyData/260624_flutter_c01
-```
-
-### LCO（リミットサイクル振動）非線形解析 `--lco`
-
-`--lco` を付けると、Trickey et al. (2002) / Amandolese et al. (2013) の手法に基づく
-LCO 応答タイプ（stable / periodic / quasi-periodic / chaotic）の判別材料を追加出力する
-（Fy・Mz の位相図・Poincaré断面・調和指標・成長率、迎角に沿った位相図スイープ、
-分岐図・周波数合流図・指標マップ・風速版スペクトログラム）。
-
-```bash
-python flutter_analysis.py --base_dir C:/WindyData/260624_flutter --lco
-```
-
-**図・指標の読み方は [`LCO_ANALYSIS_GUIDE.md`](LCO_ANALYSIS_GUIDE.md) を参照**（応答タイプ
-早見表つき）。`--lco` 無効時は従来挙動（LCO図・列は出ない）。1つのCSVだけで素早く
-確認するなら `python lco_analysis.py <6軸CSV>`。
+フラッター実験（`flutter_run_experiment.m`）のデータ（`_ofst` / `_cXX` 構成）の後処理
+（`flutter_analysis.py` / `lco_analysis.py`）は、剛体翼とは別系統のため
+**専用ドキュメント [FLUTTER_README.md](FLUTTER_README.md) にまとめている**（自動実行の流れ・
+手動実行コマンド・出力グラフの種類と出し方・CLIオプションはそちらを参照）。
+LCO 図・指標の読み方は [LCO_ANALYSIS_GUIDE.md](LCO_ANALYSIS_GUIDE.md)。
 
 ---
 
