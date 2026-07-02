@@ -290,12 +290,21 @@ def resample_uniform(t, x, fs=FS_TARGET):
 
     PCタイマの分解能不足でタイムスタンプが重複・非単調になることがあるため、
     cubic補間（x が狭義単調増加であることを要求）の前に重複点を除去する。
+
+    重複除去後の点数が cubic 補間の次数（4点必要）に満たない場合は
+    ValueError を送出する。呼び出し側で短すぎるデータ点をスキップする
+    判断ができるようにするため。
     """
     # 狭義単調増加になるよう、t が増加しない点を除外（最初の出現を残す）
     keep = np.concatenate(([True], np.diff(t) > 0))
     if not keep.all():
         t = t[keep]
         x = x[keep]
+
+    if len(t) < 4:
+        raise ValueError(
+            f"resample_uniform: 重複除去後の点数が不足しています（{len(t)} 点、cubic 補間には4点以上必要）"
+        )
 
     t_uniform = np.arange(t[0], t[-1], 1.0 / fs)
     f_interp  = interpolate.interp1d(t, x, kind="cubic", bounds_error=False,
@@ -313,6 +322,22 @@ def calc_psd(x, fs=FS_TARGET, nperseg=2048):
     """Welch 法で PSD を推定する。"""
     freqs, psd = signal.welch(x, fs=fs, nperseg=min(nperseg, len(x)))
     return freqs, psd
+
+
+def psd_on_grid(freqs, psd, ref_freqs):
+    """psd を ref_freqs の周波数グリッド上へ線形補間する。
+
+    calc_psd は nperseg=min(2048, len(x)) のため、信号長が短い計測点が
+    1つでも混じると freqs の長さ・刻みが他の計測点と変わる。
+    build_aoa_freq_grid / build_speed_freq_grid は複数計測点の PSD を
+    np.vstack で束ねるため、長さが揃っていないと例外になる。
+    束ねる直前に全て ref_freqs（代表として最初の計測点の freqs）へ
+    揃えることで、この暗黙の前提を明示的なガードに変える。
+    """
+    freqs = np.asarray(freqs)
+    if freqs.shape == np.asarray(ref_freqs).shape and np.allclose(freqs, ref_freqs):
+        return psd
+    return np.interp(ref_freqs, freqs, psd, left=0.0, right=0.0)
 
 
 def dominant_freq(freqs, psd, fmin=1.0, fmax=500.0):
@@ -484,8 +509,15 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
         warnings.warn(f"オフセットキーが見つかりません: {fname}")
 
     # ---- 均一グリッドへリサンプリング ----
-    t_u, Fy_u = resample_uniform(t, Fy)
-    _,   Mz_u = resample_uniform(t, Mz)
+    # len(df)>=100 でも重複タイムスタンプ除去後に4点未満まで減ることがあり、
+    # その場合 resample_uniform が ValueError を送出する。他の点の処理を
+    # 止めないよう、この1点だけ warning でスキップする。
+    try:
+        t_u, Fy_u = resample_uniform(t, Fy)
+        _,   Mz_u = resample_uniform(t, Mz)
+    except ValueError as e:
+        warnings.warn(f"リサンプリング失敗のためスキップ: {fname}（{e}）")
+        return None
 
     # ---- 両端トリミングの範囲を決定 ----
     # 補間段差・ハイパス端トランジェントが 0s/30s 付近に作る非物理的スパイクを
@@ -777,10 +809,14 @@ def build_aoa_freq_grid(spec_rows, key, args):
     fmask  = freqs <= args.map_fmax
     f_plot = freqs[fmask]
 
-    # Z[freq, aoa] を構築（重複迎角は平均）
+    # Z[freq, aoa] を構築（重複迎角は平均）。
+    # 各計測点の freqs は基本的に全点同一グリッドだが、信号長が短い点が
+    # 混じっていると calc_psd の nperseg=min(2048,len(x)) により長さ・刻みが
+    # 変わることがある。vstack で束ねる前に代表グリッド（freqs）へ揃える。
     Z = np.empty((f_plot.size, aoa_axis.size))
     for j, a in enumerate(aoa_axis):
-        Z[:, j] = np.vstack([r[key][fmask] for r in by_aoa[a]]).mean(axis=0)
+        cols = [psd_on_grid(r["freqs"], r[key], freqs)[fmask] for r in by_aoa[a]]
+        Z[:, j] = np.vstack(cols).mean(axis=0)
 
     zmax = Z.max()
     if zmax <= 0:
@@ -827,6 +863,10 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
     freqs = None
     # 条件ごとに (mean_U, 平均PSD) を作る。風速値が偶然衝突しても条件は潰さない
     # よう、いったんリストで持ってから最後に風速昇順で並べる。
+    #
+    # 各計測点の freqs は信号長が短い点が混じると長さ・刻みが変わりうる
+    # （calc_psd の nperseg=min(2048,len(x)) のため）。vstack で束ねる前に
+    # 代表グリッド（最初に見つかった freqs）へ揃える。
     entries = []   # list of (u_val, psd_col)
     for rep_U, spec_rows in panel_data:
         matched = [r for r in spec_rows if r["aoa"] == target_aoa]
@@ -834,7 +874,7 @@ def build_speed_freq_grid(panel_data, target_aoa, key, args):
             continue
         if freqs is None:
             freqs = matched[0]["freqs"]
-        psds = np.vstack([r[key] for r in matched]).mean(axis=0)
+        psds = np.vstack([psd_on_grid(r["freqs"], r[key], freqs) for r in matched]).mean(axis=0)
         # 対象迎角の計測点の平均風速。全て NaN なら代表風速へフォールバック
         u_vals = [r.get("mean_U", np.nan) for r in matched]
         u_vals = [u for u in u_vals if u is not None and np.isfinite(u)]
