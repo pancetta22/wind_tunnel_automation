@@ -1013,6 +1013,10 @@ def plot_aoa_freq_panel(panel_data, out_dir, args):
     「風速＝条件」を行方向に積み上げて表現する（上=高速、下=低速）。
     1枚の図に Fy（左列）・Mz（右列）を並べて出力する。
 
+    各行（風速条件）は build_aoa_freq_grid によって自条件内の最大値へ
+    個別に正規化される。条件間でパワーの絶対値を比較したい場合は
+    build_speed_freq_grid（全条件を単一グリッドで正規化）を使うこと。
+
     panel_data : list of (rep_U, spec_rows)
     """
     if not panel_data:
@@ -1051,11 +1055,16 @@ def plot_aoa_freq_panel(panel_data, out_dir, args):
 
     fig.suptitle("AoA-frequency map across wind speeds", fontsize=14, y=0.995)
 
+    # 各行（風速条件）は build_aoa_freq_grid 内でそれぞれ独立に自条件の
+    # 最大値へ正規化している（条件ごとにピーク位置を見やすくするため）。
+    # そのため列で共有する1本のカラーバーは行間でdB値を比較できる指標では
+    # ない。誤読を避けるため、その旨を明示したラベルにする。
     for col in (0, 1):
         if meshes[col] is not None:
             cbar = fig.colorbar(meshes[col], ax=axes[:, col].tolist(),
                                 pad=0.02, aspect=40)
-            cbar.set_label("Power [dB] (normalised to max)", fontsize=10)
+            cbar.set_label("Power [dB]\n(normalised to each row's own max —\nnot comparable across rows)",
+                          fontsize=9)
 
     fname = "aoa_freq_panel.png"
     fig.savefig(os.path.join(out_dir, fname), dpi=150, bbox_inches="tight")
