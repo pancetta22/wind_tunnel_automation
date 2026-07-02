@@ -830,27 +830,8 @@ function offset_mV = measure_volt_offset_(s_volt)
 
     fprintf('[オフセット計測] 無風時の差圧電圧を %.0f 秒間計測します...\n', MEAS_SEC);
 
-    samples = zeros(1, 200);
-    n = 0;
-    t_end = tic;
-
-    while toc(t_end) < MEAS_SEC
-        try
-            writeline(s_volt, 'MD?');
-            raw  = readline(s_volt);
-            v_mv = str2double(strtrim(raw)) * 1000;
-            if ~isnan(v_mv)
-                n = n + 1;
-                if n > numel(samples)
-                    samples = [samples, zeros(1, 100)]; %#ok<AGROW>
-                end
-                samples(n) = v_mv;
-                fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
-            end
-        catch
-        end
-    end
-    fprintf('\n');
+    % flush + 短タイムアウトで直前フェーズの古い mV 混入を防ぐ（共有関数）。
+    [samples, n] = windy_sample_voltage_mv(s_volt, MEAS_SEC);
 
     if n == 0
         warning('[オフセット計測] サンプルを取得できませんでした。');
@@ -858,7 +839,7 @@ function offset_mV = measure_volt_offset_(s_volt)
         return;
     end
 
-    offset_mV = mean(samples(1:n));
+    offset_mV = mean(samples);
     fprintf('  → 電圧オフセット = %+.4f mV  (%d サンプル)\n\n', offset_mV, n);
 end
 
@@ -1258,35 +1239,17 @@ end
 function rep_mV = measure_rep_voltage_(s_volt)
     MEAS_SEC = 5;
     fprintf('[代表電圧計測] 現在の風速の代表電圧（デジボル）を %.0f 秒間計測します...\n', MEAS_SEC);
-    
-    samples = zeros(1, 200);
-    n = 0;
-    t_end = tic;
-    
-    while toc(t_end) < MEAS_SEC
-        try
-            writeline(s_volt, 'MD?');
-            raw  = readline(s_volt);
-            v_mv = str2double(strtrim(raw)) * 1000;
-            if ~isnan(v_mv)
-                n = n + 1;
-                if n > numel(samples)
-                    samples = [samples, zeros(1, 100)]; %#ok<AGROW>
-                end
-                samples(n) = v_mv;
-                fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
-            end
-        catch
-        end
-    end
-    fprintf('\n');
-    
+
+    % flush + 短タイムアウトで直前フェーズの古い mV 混入を防ぐ（共有関数）。
+    % 風速フォルダ名（V_*mV）の基準になるため、残留データの混入は特に有害。
+    [samples, n] = windy_sample_voltage_mv(s_volt, MEAS_SEC);
+
     if n == 0
         warning('[代表電圧計測] サンプルを取得できませんでした。0mV とします。');
         rep_mV = 0.0;
         return;
     end
-    
-    rep_mV = mean(samples(1:n));
+
+    rep_mV = mean(samples);
     fprintf('  → 代表電圧 = %+.1f mV  (%d サンプル)\n\n', rep_mV, n);
 end

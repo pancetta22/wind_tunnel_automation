@@ -586,68 +586,11 @@ function pts = build_flutter_sequence_(phase, max_angle, angle_step)
     end
 end
 
-function [samples, n] = sample_voltage_mv_(s_volt, duration_sec, timeout_sec, show_progress)
-    % 一定秒数、R6441B から差圧電圧 [mV] を繰り返し読み取って配列で返す。
-    % measure_volt_offset_ / measure_representative_windspeed_ の共通処理。
-    %
-    % デジボルの詰まり対策：溜まった古い応答を捨て、短いタイムアウト＋
-    % ポーリング間隔で読む（これを行わないと直前フェーズの古い mV を
-    % 平均に混ぜてしまう）。読み取り失敗（writeline/readline 例外や
-    % NaN パース）が連続する場合は、原因不明のまま無限に握りつぶさない
-    % よう一定回数ごとに警告を出す。
-    if nargin < 3 || isempty(timeout_sec), timeout_sec = 0.8; end
-    if nargin < 4, show_progress = true; end
-
-    CONSEC_FAIL_WARN = 30;  % 連続失敗がこの回数を超えたら警告（0.1s間隔で約3秒相当）
-
-    samples = zeros(1, 200);
-    n = 0;
-    n_consec_fail = 0;
-
-    flush(s_volt, 'input');
-    prev_timeout = s_volt.Timeout;
-    s_volt.Timeout = timeout_sec;
-    t_end = tic;
-
-    while toc(t_end) < duration_sec
-        try
-            writeline(s_volt, 'MD?');
-            raw  = readline(s_volt);
-            v_mv = str2double(strtrim(raw)) * 1000;
-            if isnan(v_mv)
-                n_consec_fail = n_consec_fail + 1;
-            else
-                n_consec_fail = 0;
-                n = n + 1;
-                if n > numel(samples)
-                    samples = [samples, zeros(1, 100)]; %#ok<AGROW>
-                end
-                samples(n) = v_mv;
-                if show_progress
-                    fprintf('  %2d サンプル  最新: %+.2f mV\r', n, v_mv);
-                end
-            end
-        catch
-            n_consec_fail = n_consec_fail + 1;
-        end
-
-        if n_consec_fail == CONSEC_FAIL_WARN
-            warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
-        end
-
-        pause(0.1);
-    end
-    s_volt.Timeout = prev_timeout;
-    if show_progress, fprintf('\n'); end
-
-    samples = samples(1:n);
-end
-
 function [rep_mv, rep_U] = measure_representative_windspeed_(s_volt, cfg, met)
     MEAS_SEC = 5;
     fprintf('[代表風速計測] %.0f 秒間計測中...\n', MEAS_SEC);
 
-    [samples, n] = sample_voltage_mv_(s_volt, MEAS_SEC);
+    [samples, n] = windy_sample_voltage_mv(s_volt, MEAS_SEC);
 
     if n == 0
         warning('[代表風速計測] サンプルを取得できませんでした。0 mV として扱います。');
@@ -744,7 +687,7 @@ function offset_mV = measure_volt_offset_(s_volt)
     MEAS_SEC = 5;
     fprintf('[オフセット計測] 無風時の差圧電圧を %.0f 秒間計測します...\n', MEAS_SEC);
 
-    [samples, n] = sample_voltage_mv_(s_volt, MEAS_SEC);
+    [samples, n] = windy_sample_voltage_mv(s_volt, MEAS_SEC);
 
     if n == 0
         warning('[オフセット計測] サンプルを取得できませんでした。');
