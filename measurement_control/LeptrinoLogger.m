@@ -180,6 +180,12 @@ classdef LeptrinoLogger < handle
         function result = getResult(obj)
             % 返値の例（サイズ制限）: struct('status','ok','samples',24013,'size_kb',1004.2)
             % 返値の例（秒数制限）  : struct('status','ok','samples',36018,'size_kb',3001.5,'duration_sec',30.01)
+            %
+            % leptrino_server.py は stderr を stdout にマージして起動しており
+            % (redirectErrorStream(true))、結果 JSON はプロセス終了直前に最後の
+            % 行として出力される。そのため stdout の最初の1行ではなく、末尾から
+            % 走査して最初に jsondecode に成功した行を採用する（先頭に警告等の
+            % ログ行が混ざっていても壊れないようにするため）。
             result = struct('status', 'unknown', 'samples', 0, ...
                             'size_kb', obj.getSizeKB());
             if isempty(obj.jProc_)
@@ -188,10 +194,20 @@ classdef LeptrinoLogger < handle
             try
                 reader = java.io.BufferedReader( ...
                     java.io.InputStreamReader(obj.jProc_.getInputStream(), 'UTF-8'));
+                lines = {};
                 line = reader.readLine();
+                while ~isempty(line)
+                    lines{end+1} = char(line); %#ok<AGROW>
+                    line = reader.readLine();
+                end
                 reader.close();
-                if ~isempty(line)
-                    result = jsondecode(char(line));
+                for k = numel(lines):-1:1
+                    if isempty(strtrim(lines{k})), continue; end
+                    try
+                        result = jsondecode(lines{k});
+                        break;
+                    catch
+                    end
                 end
             catch
             end
@@ -207,31 +223,54 @@ classdef LeptrinoLogger < handle
         end
 
         function rows = getRecentRows(obj, n_rows)
+            % ファイル末尾から n_rows 行分をパースして返す。
+            % leptrino_server.py の書式は "%.4f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f\n"
+            % （7列）で、符号・整数桁数によって1行は 30～90byte 程度まで
+            % 変動しうる。1行あたりの想定バイト数に余裕係数を掛け、それでも
+            % n_rows 行に届かない場合は読み出し範囲を広げてリトライする。
             rows = zeros(0, 7);
             if isempty(obj.filepath_) || ~isfile(obj.filepath_), return; end
+            fid = -1;
             try
+                BYTES_PER_ROW_EST = 160;  % 余裕を持たせた1行あたりの想定バイト数
+                MAX_ATTEMPTS = 4;
+
                 fid = fopen(obj.filepath_, 'r', 'n', 'CP932');
                 if fid < 0, return; end
                 fseek(fid, 0, 'eof');
-                file_size  = ftell(fid);
-                read_bytes = min(n_rows * 64, file_size);
-                fseek(fid, -read_bytes, 'eof');
-                tail = fread(fid, read_bytes, 'char=>char')';
-                fclose(fid);
+                file_size = ftell(fid);
 
-                lines = strsplit(strtrim(tail), newline);
-                buf   = zeros(numel(lines), 7);
-                count = 0;
-                for k = 1:numel(lines)
-                    vals = sscanf(lines{k}, '%f,%f,%f,%f,%f,%f,%f');
-                    if numel(vals) == 7
-                        count = count + 1;
-                        buf(count, :) = vals';
+                count  = 0;
+                buf    = zeros(0, 7);
+                mult   = 1;
+                for attempt = 1:MAX_ATTEMPTS
+                    read_bytes = min(n_rows * BYTES_PER_ROW_EST * mult, file_size);
+                    fseek(fid, -read_bytes, 'eof');
+                    tail = fread(fid, read_bytes, 'char=>char')';
+
+                    lines = strsplit(strtrim(tail), newline);
+                    buf   = zeros(numel(lines), 7);
+                    count = 0;
+                    for k = 1:numel(lines)
+                        vals = sscanf(lines{k}, '%f,%f,%f,%f,%f,%f,%f');
+                        if numel(vals) == 7
+                            count = count + 1;
+                            buf(count, :) = vals';
+                        end
                     end
+
+                    if count >= n_rows || read_bytes >= file_size
+                        break;
+                    end
+                    mult = mult * 4;
                 end
+                fclose(fid);
+                fid = -1;
+
                 if count == 0, return; end
                 rows = buf(max(1, count - n_rows + 1):count, :);
             catch
+                if fid >= 0, try; fclose(fid); catch; end; end
             end
         end
 
