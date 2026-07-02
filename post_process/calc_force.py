@@ -160,8 +160,6 @@ def average():
     # --- 重複計測点があれば（リトライ残骸など）汚染前に明示エラーで停止 ---
     _check_duplicate_points(folder_list)
 
-    print(folder_list)
-
     col_names = ["time", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
 
     data1_force = pd.DataFrame(
