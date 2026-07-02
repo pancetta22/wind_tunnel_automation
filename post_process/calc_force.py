@@ -335,6 +335,11 @@ def calc():
     data = pd.concat([Mdata.iloc[::-1], Pdata], ignore_index=True)
 
     # 空力中心まわり
+    # N/Nm → gf/gf10cm → （校正行列適用）→ N/Nm と往復変換するだけの中間単位
+    # なので、ここの重力加速度定数（9.8）は下の逆変換（L364-365）と一致してさえ
+    # いれば結果に影響しない。make_windspeed.py/flutter_analysis.py が使う
+    # 9.80665（物理定数としての重力加速度）とは値が異なるが、意図的にこの
+    # ブロック内でのみ閉じた単位変換であるため統一の必要はない。
     _CF = ["Fx", "Fy", "Fz"]
     _CM = ["Mx", "My", "Mz"]
     F_adcenter_gf = data.copy()

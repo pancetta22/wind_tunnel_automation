@@ -47,7 +47,6 @@ flutter_analysis.py  フラッター実験 後処理スクリプト
 import argparse
 import datetime
 import json
-import math
 import os
 import re
 import sys
@@ -68,6 +67,11 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(errors="backslashreplace")
     except (AttributeError, ValueError):
         pass
+
+# 風速較正の定数・計算式は make_windspeed.py と完全一致させる必要があるため、
+# 独自に再実装せずここから import する（同じ post_process/ ディレクトリにあり、
+# Python がスクリプトのディレクトリを sys.path[0] に自動追加するため解決できる）。
+from make_windspeed import WINDSPEED_DEFAULTS, mV_to_U as mv_to_U
 
 
 # ============================================================
@@ -97,30 +101,8 @@ EDGE_TRIM_SEC = 0.5
 RMS_WINDOW_SEC  = 1.0   # 窓幅 [秒]
 RMS_OVERLAP     = 0.5   # オーバーラップ率
 
-# 風速較正のデフォルト（experiment_log.json に無い場合のフォールバック。
-# make_windspeed.py の DEFAULTS と一致させる）
-WINDSPEED_DEFAULTS = {
-    "water_density":  0.99704,
-    "volt_offset_mV": -5.0,
-    "calib_a":        0.007904809948345278,
-    "calib_b":        -0.340200009144243,
-}
-
-
-# ============================================================
-#  差圧電圧 → 風速（make_windspeed.py の mV_to_U と完全一致）
-# ============================================================
-def mv_to_U(mv, rho, water_density, offset_mV, a, b):
-    """差圧電圧 [mV] から風速 [m/s] を計算する。
-
-    U = sqrt(2 * water_density * ((mV - offset) * a + b) * g / rho)
-    """
-    G = 9.80665
-    h = (mv - offset_mV) * a + b
-    inner = 2.0 * water_density * h * G / rho
-    if inner <= 0:
-        return 0.0
-    return math.sqrt(inner)
+# WINDSPEED_DEFAULTS・mv_to_U は make_windspeed.py から import している
+# （冒頭の import 文を参照。二重実装による乖離を避けるため）。
 
 
 def windspeed_params_from_log(log):
