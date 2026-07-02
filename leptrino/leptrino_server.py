@@ -207,8 +207,9 @@ elif args.mode == "stream":
         dll.GetSerialData(PORT, Data, ctypes.byref(Status))
 
     # ドレイン完了後、次の新鮮なサンプルが来るまで待つ
+    # （1200Hzのポーリングを妨げない極小sleepでCPUスピンを緩和）
     while not dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
-        pass
+        time.sleep(0.0002)
 
     # ----------------------------------------------------------
     #  ② 計測開始（ここが真の t=0）
@@ -225,6 +226,8 @@ elif args.mode == "stream":
     try:
         while True:
             if not dll.GetSerialData(PORT, Data, ctypes.byref(Status)):
+                # 1200Hz(≈0.83ms間隔)のポーリングを妨げない極小sleepでCPUスピンを緩和
+                time.sleep(0.0002)
                 continue
 
             elapsed = time.perf_counter() - t_start
