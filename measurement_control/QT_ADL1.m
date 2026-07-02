@@ -220,6 +220,12 @@ classdef QT_ADL1 < handle
             % これを「移動完了」と誤判定すると、実際は移動中のまま次工程へ
             % 進んでしまう危険があるため、'?' の間はリトライしてタイムアウト
             % まで待つ（'D'=移動中と同様に扱う）。
+            %
+            % 正常停止（'K'）以外での停止（リミット'L'・非常停止'E'・原点復帰
+            % エラー'H'）やタイムアウトは、迎角が目標に到達しないまま計測が
+            % 続行されてデータが静かに汚染されるのを防ぐため error を送出する。
+            % run_experiment.m 側は計測ループの try/catch（エラーメニュー：
+            % 再試行/スキップ等）がこの例外を受け止める。
             startTime = tic;
             while true
                 obj.send('Q:A0');
@@ -227,23 +233,30 @@ classdef QT_ADL1 < handle
                 [~, status] = obj.parseStatusResponse(resp);
 
                 if ~strcmp(status, 'D') && ~strcmp(status, '?')
-                    if strcmp(status, 'L')
-                        warning('[QT-ADL1] リミット検出による停止 (L)');
-                    elseif strcmp(status, 'E')
-                        warning('[QT-ADL1] 非常停止状態 (E)');
-                    elseif strcmp(status, 'H')
-                        warning('[QT-ADL1] 原点復帰エラー停止 (H)');
+                    switch status
+                        case 'L'
+                            error('QT_ADL1:limitStop', ...
+                                '[QT-ADL1] リミット検出による停止 (L)。迎角が目標に到達していません。');
+                        case 'E'
+                            error('QT_ADL1:emergencyStop', ...
+                                '[QT-ADL1] 非常停止状態 (E)。迎角が目標に到達していません。');
+                        case 'H'
+                            error('QT_ADL1:homeError', ...
+                                '[QT-ADL1] 原点復帰エラー停止 (H)。');
                     end
-                    return;
+                    return;   % 'K'（正常停止）→ 正常完了
                 end
 
                 if toc(startTime) > obj.TIMEOUT_S
                     if strcmp(status, '?')
-                        warning('[QT-ADL1] waitForStop: 応答を取得できないままタイムアウトしました (%.0f 秒)', obj.TIMEOUT_S);
+                        error('QT_ADL1:commTimeout', ...
+                            ['[QT-ADL1] waitForStop: 応答を取得できないままタイムアウトしました (%.0f 秒)。\n' ...
+                             '  ステージとの通信を確認してください。'], obj.TIMEOUT_S);
                     else
-                        warning('[QT-ADL1] waitForStop: タイムアウト (%.0f 秒)', obj.TIMEOUT_S);
+                        error('QT_ADL1:moveTimeout', ...
+                            ['[QT-ADL1] waitForStop: 移動完了待ちタイムアウト (%.0f 秒)。\n' ...
+                             '  迎角が目標に到達していない可能性があります。'], obj.TIMEOUT_S);
                     end
-                    return;
                 end
 
                 pause(obj.POLL_INTERVAL);
