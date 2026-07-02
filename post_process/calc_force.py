@@ -340,7 +340,7 @@ def calc():
     F_adcenter_gf = data.copy()
     F_adcenter_gf[_CF] = data[_CF].astype(float) / 9.8 * 1000        # N → gf
     F_adcenter_gf[_CM] = data[_CM].astype(float) / 9.8 * 1000 * 10   # Nm → gf10cm
-    calbmatrix = np.matrix([
+    calbmatrix = np.array([
         [1, 0, 0, 0, 0, 0],
         [0, 0, 1, 0, 0, 0],
         [0, -1, 0, 0, 0, 0],
@@ -349,9 +349,9 @@ def calc():
         [1.346, 0, 0, 0, -1, 0],
     ])
     for i in range(len(F_adcenter_gf)):
-        F = np.dot(
-            calbmatrix,
-            np.array([F_adcenter_gf.loc[i, "Fx":"Mz"].to_numpy().astype(float)]).T,
+        F = (
+            calbmatrix
+            @ np.array([F_adcenter_gf.loc[i, "Fx":"Mz"].to_numpy().astype(float)]).T
         ).T
         F_adcenter_gf.loc[i, "Fx"] = F[0, 0]
         F_adcenter_gf.loc[i, "Fy"] = F[0, 1]
