@@ -278,7 +278,7 @@ def drift():
                 )
             elif "Pdata" in data.loc[i, "name"] and data.loc[i, "name"].endswith("00.00.csv"):
                 Pdata = np.append(Pdata, [data.loc[i, :]], axis=0)
-                Pdata[len(Pdata) - 1, 1:] = Mdata[0, 4:]
+                Pdata[len(Pdata) - 1, 1:] = Mdata[0, 1:]
             elif "Pdata" in data.loc[i, "name"] and data.loc[i, "name"].endswith("01.csv"):
                 Pdata = np.append(Pdata, [data.loc[i, :]], axis=0)
                 Pdata[len(Pdata) - 1, 1:] = (
