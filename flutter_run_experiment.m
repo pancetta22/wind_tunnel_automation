@@ -519,9 +519,13 @@ function name = input_base_name_(output_dir)
             fprintf('  ※ 有効な名前を入力してください（特殊文字 %s 不可）\n', forbidden);
             continue;
         end
-        ofst_check = fullfile(output_dir, name, sprintf('%s_ofst', name), 'data');
-        if isfolder(ofst_check)
-            fprintf('  ※ [%s_ofst] は既に存在します。上書きしますか？ [y/n]: ', name);
+        % ベースフォルダ自体（output_dir/name/）の存在で判定する。
+        % 以前は _ofst/data の有無だけを見ていたため、ofst 無し・c01 等の
+        % 条件フォルダだけが既存の場合（例: 途中で ofst を消した再実行）を
+        % 見逃し、旧条件フォルダと新規計測が混在する恐れがあった。
+        base_check = fullfile(output_dir, name);
+        if isfolder(base_check)
+            fprintf('  ※ [%s] は既に存在します。上書きしますか？ [y/n]: ', name);
             ans_ow = strtrim(input('', 's'));
             if ~any(strcmpi(ans_ow, {'y', 'yes'}))
                 continue;
@@ -549,14 +553,11 @@ function [max_angle, angle_step, measure_sec] = configure_flutter_sweep_(cfg)
     max_angle   = ask_int_('最大迎角 [度, 1-30]: ', 1, 30);
     angle_step  = ask_int_('迎角の刻み幅 [度, 1-max]: ', 1, max_angle);
 
-    while true
-        val = str2double(input(sprintf('計測秒数/点 [秒, デフォルト=%.1f]: ', cfg.flutter_measure_sec), 's'));
-        if isnan(val) || val <= 0
-            measure_sec = cfg.flutter_measure_sec;
-        else
-            measure_sec = val;
-        end
-        break;
+    val = str2double(input(sprintf('計測秒数/点 [秒, デフォルト=%.1f]: ', cfg.flutter_measure_sec), 's'));
+    if isnan(val) || val <= 0
+        measure_sec = cfg.flutter_measure_sec;
+    else
+        measure_sec = val;
     end
 
     n_each = numel(angle_step:angle_step:max_angle);
