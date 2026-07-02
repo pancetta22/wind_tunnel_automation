@@ -22,10 +22,10 @@ classdef QT_ADL1 < handle
 %   終端文字   : CR+LF
 %   フロー制御 : なし
 
-    properties
-        port            % serialport オブジェクト
-        pulsePerDeg     % 1度あたりのパルス数
-        originPulse     % 迎角0°に対応する機械座標 [pulse]（config.json の origin_pulse）
+    properties (Access = private)
+        port_            % serialport オブジェクト
+        pulsePerDeg_     % 1度あたりのパルス数
+        originPulse_     % 迎角0°に対応する機械座標 [pulse]（config.json の origin_pulse）
     end
 
     properties (Constant)
@@ -56,27 +56,27 @@ classdef QT_ADL1 < handle
             if nargin < 3 || isempty(originPulse)
                 originPulse = obj.ORIGIN_PULSE_DEFAULT;
             end
-            obj.pulsePerDeg = pulsePerDeg;
-            obj.originPulse = originPulse;
+            obj.pulsePerDeg_ = pulsePerDeg;
+            obj.originPulse_ = originPulse;
 
-            obj.port = serialport(comPort, obj.BAUD_RATE, ...
+            obj.port_ = serialport(comPort, obj.BAUD_RATE, ...
                 'DataBits',    8,      ...
                 'Parity',      'none', ...
                 'StopBits',    1,      ...
                 'FlowControl', 'none');
 
-            configureTerminator(obj.port, 'CR/LF', 'CR/LF');
-            obj.port.Timeout = obj.TIMEOUT_S;
+            configureTerminator(obj.port_, 'CR/LF', 'CR/LF');
+            obj.port_.Timeout = obj.TIMEOUT_S;
 
             fprintf('[QT-ADL1] %s に接続しました (%.0f bps)\n', comPort, obj.BAUD_RATE);
             fprintf('[QT-ADL1] 座標系: 迎角0° = %d pulse, %.4f°/pulse\n', ...
-                obj.originPulse, 1/obj.pulsePerDeg);
+                obj.originPulse_, 1/obj.pulsePerDeg_);
         end
 
         % ----- デストラクタ -----
         function delete(obj)
-            if ~isempty(obj.port) && isvalid(obj.port)
-                delete(obj.port);
+            if ~isempty(obj.port_) && isvalid(obj.port_)
+                delete(obj.port_);
                 fprintf('[QT-ADL1] 切断しました\n');
             end
         end
@@ -89,8 +89,8 @@ classdef QT_ADL1 < handle
             obj.waitForStop();
             fprintf('[QT-ADL1] 機械原点に到達\n');
 
-            fprintf('[QT-ADL1] 迎角0°へ移動中 (%d pulse)...\n', obj.originPulse);
-            obj.moveAbsolute(obj.originPulse);
+            fprintf('[QT-ADL1] 迎角0°へ移動中 (%d pulse)...\n', obj.originPulse_);
+            obj.moveAbsolute(obj.originPulse_);
             fprintf('[QT-ADL1] 迎角0°に到達\n');
         end
 
@@ -98,7 +98,7 @@ classdef QT_ADL1 < handle
         function moveToAngle(obj, angle_deg)
             % 迎角 angle_deg [度] へ絶対移動する
             % 座標変換: pulse = ORIGIN_PULSE - angle_deg × pulsePerDeg
-            pulses = obj.originPulse - round(angle_deg * obj.pulsePerDeg);
+            pulses = obj.originPulse_ - round(angle_deg * obj.pulsePerDeg_);
             fprintf('[QT-ADL1] 迎角移動: %.4f° → %+d pulse\n', angle_deg, pulses);
             obj.moveAbsolute(pulses);
         end
@@ -107,7 +107,7 @@ classdef QT_ADL1 < handle
         function angle = getAngle(obj)
             % 戻り値: 迎角 [度]
             pos   = obj.getPosition();
-            angle = (obj.originPulse - pos) / obj.pulsePerDeg;
+            angle = (obj.originPulse_ - pos) / obj.pulsePerDeg_;
         end
 
         % ----- 現在位置取得（パルス単位）-----
@@ -138,7 +138,7 @@ classdef QT_ADL1 < handle
         % ----- 相対移動（角度指定）-----
         function moveByAngle(obj, delta_deg)
             % 現在の迎角から相対的に回転する（+ = 迎角増加方向）
-            pulses = -round(delta_deg * obj.pulsePerDeg); % 符号反転に注意
+            pulses = -round(delta_deg * obj.pulsePerDeg_); % 符号反転に注意
             fprintf('[QT-ADL1] 相対角度移動: %+.4f°\n', delta_deg);
             cmd = sprintf('MGO:A%d', pulses);
             obj.send(cmd);
@@ -203,12 +203,12 @@ classdef QT_ADL1 < handle
     methods (Access = private)
 
         function send(obj, cmd)
-            writeline(obj.port, cmd);
+            writeline(obj.port_, cmd);
         end
 
         function resp = recv(obj)
             try
-                resp = char(strtrim(readline(obj.port)));
+                resp = char(strtrim(readline(obj.port_)));
             catch
                 resp = '';
                 warning('[QT-ADL1] レスポンスのタイムアウトまたは受信エラー');
