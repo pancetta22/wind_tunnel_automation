@@ -441,16 +441,25 @@ def main() -> int:
                         help=f"迎角への回転補正[deg]（既定 {ROTATE_OFFSET_DEG}）")
     args = parser.parse_args()
 
+    # MATLAB の system() はコマンドライン引数を cp932 でエンコードするため、
+    # 日本語を含むパスを直接引数で渡すと文字化けする
+    # （flutter_run_postprocess.m / flutter_launch_bg.py と同じ問題）。
+    # 環境変数 WINDY_PHOTO_DIR / WINDY_PHOTO_OUT があればコマンドライン引数より優先する。
+    env_photo_dir = os.environ.get("WINDY_PHOTO_DIR") or None
+    env_out_dir   = os.environ.get("WINDY_PHOTO_OUT") or None
+
     exp_dir = os.getcwd()
     # 既定の入出力先。新構成(picture/photo)を優先し、無ければ旧式(./photo)。
-    if args.photo_dir:
+    if env_photo_dir:
+        photo_dir = env_photo_dir
+    elif args.photo_dir:
         photo_dir = args.photo_dir
     elif os.path.isdir(os.path.join(exp_dir, "picture", "photo")):
         photo_dir = os.path.join(exp_dir, "picture", "photo")
     else:
         photo_dir = os.path.join(exp_dir, "photo")
     # 出力は photo/ の親（picture/）。各サブフォルダ(Gmarkers/…)はその直下に作る。
-    out_dir = args.out or os.path.dirname(os.path.abspath(photo_dir))
+    out_dir = env_out_dir or args.out or os.path.dirname(os.path.abspath(photo_dir))
 
     if not os.path.isdir(photo_dir):
         print(f"[エラー] 写真フォルダがありません: {photo_dir}", file=sys.stderr)

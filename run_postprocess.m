@@ -53,7 +53,13 @@ venv_python = setup_postprocess_venv(root, py64);
 %   force_measurement.py が make_windspeed と calc_force を順に実行し、
 %   結果を force/analysis/ に出力する（旧フラット構成は実験フォルダ直下）。
 fprintf('[後処理] 力データを処理中（windspeed → 空力係数）...\n');
-[st1, out1] = system(sprintf('"%s" "%s" "%s"', venv_python, fm_path, exp_dir));
+% MATLAB の system() はコマンドライン引数を cp932 でエンコードするため、
+% 日本語を含む実験パスを直接引数で渡すと文字化けする
+% （flutter_run_postprocess.m / flutter_launch_bg.py と同じ問題）。
+% 環境変数経由で渡すことで回避する。
+setenv('WINDY_EXP_DIR', exp_dir);
+[st1, out1] = system(sprintf('"%s" "%s"', venv_python, fm_path));
+setenv('WINDY_EXP_DIR', '');
 if ~isempty(strtrim(out1)), fprintf('%s\n', out1); end
 if st1 ~= 0
     fprintf('[警告] force_measurement.py に失敗しました（終了コード %d）。後処理を中断します。\n\n', st1);
@@ -80,8 +86,12 @@ if contains(lower(exp_name), 'rigid')
         % 同梱の過去データと合わせて比較パワポを comparison_dir に出力する。
         if ~isfolder(comparison_dir), mkdir(comparison_dir); end
         fprintf('[比較] 過去データと比較し、比較パワポを生成します...\n');
-        [stc, outc] = system(sprintf('"%s" "%s" --scan "%s" --out "%s"', ...
-            venv_python, cmp_path, cfg.output_dir, comparison_dir));
+        % 日本語パスの cp932 化け対策として環境変数経由で渡す（上と同じ理由）。
+        setenv('WINDY_COMPARISON_SCAN', cfg.output_dir);
+        setenv('WINDY_COMPARISON_OUT',  comparison_dir);
+        [stc, outc] = system(sprintf('"%s" "%s"', venv_python, cmp_path));
+        setenv('WINDY_COMPARISON_SCAN', '');
+        setenv('WINDY_COMPARISON_OUT',  '');
         if ~isempty(strtrim(outc)), fprintf('%s\n', outc); end
         if stc == 0
             fprintf('[比較完了] 比較パワポを %s に保存しました。\n\n', comparison_dir);
@@ -253,8 +263,12 @@ function prompt_picture_analysis_(photo_dir, venv_python, pic_script)
     end
 
     fprintf('[輪郭抽出] 翼型輪郭を抽出中...\n');
-    [st_ex, out_ex] = system(sprintf('"%s" "%s" --photo_dir "%s" --out "%s"', ...
-        venv_python, pic_script, photo_dir, picture_dir));
+    % 日本語パスの cp932 化け対策として環境変数経由で渡す（force_measurement と同じ理由）。
+    setenv('WINDY_PHOTO_DIR', photo_dir);
+    setenv('WINDY_PHOTO_OUT', picture_dir);
+    [st_ex, out_ex] = system(sprintf('"%s" "%s"', venv_python, pic_script));
+    setenv('WINDY_PHOTO_DIR', '');
+    setenv('WINDY_PHOTO_OUT', '');
     if ~isempty(strtrim(out_ex)), fprintf('%s\n', out_ex); end
     if st_ex == 0
         fprintf('[輪郭抽出完了] %s に保存しました。\n\n', picture_dir);

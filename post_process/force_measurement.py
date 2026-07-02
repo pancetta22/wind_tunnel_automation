@@ -67,11 +67,24 @@ def resolve_paths(exp_dir):
 
 
 def main() -> int:
+    # MATLAB の system() はコマンドライン引数を cp932 でエンコードするため、
+    # 日本語を含む実験パスを直接引数で渡すと Python 側で文字化けする
+    # （flutter_run_postprocess.m / flutter_launch_bg.py と同じ問題）。
+    # 環境変数 WINDY_EXP_DIR が設定されていればそちらを優先し、
+    # 手動実行時の利便性のため位置引数もフォールバックとして残す。
+    env_exp_dir = os.environ.get("WINDY_EXP_DIR", "")
+
     ap = argparse.ArgumentParser(description="力計測の後処理（windspeed → 空力係数）")
-    ap.add_argument("exp_dir", help="実験フォルダのパス")
+    ap.add_argument("exp_dir", nargs="?", default=None,
+                    help="実験フォルダのパス（WINDY_EXP_DIR 環境変数があればそちらを優先）")
     args = ap.parse_args()
 
-    exp_dir = os.path.abspath(args.exp_dir)
+    raw_exp_dir = env_exp_dir or args.exp_dir
+    if not raw_exp_dir:
+        print("[エラー] 実験フォルダを指定してください（引数または WINDY_EXP_DIR）", file=sys.stderr)
+        return 1
+
+    exp_dir = os.path.abspath(raw_exp_dir)
     if not os.path.isdir(exp_dir):
         print(f"[エラー] 実験フォルダがありません: {exp_dir}", file=sys.stderr)
         return 1

@@ -58,15 +58,18 @@ def _config_output_dir():
 
 # 出力先 pptx。--out で実験の force/comparison/ を指定する想定。
 # 省略時は config.json の output_dir 直下に置く（無ければ SCRIPT_DIR）。
-_args_out = None
+#
+# MATLAB の system() はコマンドライン引数を cp932 でエンコードするため、
+# 日本語を含むパスを直接引数で渡すと文字化けする
+# （flutter_run_postprocess.m / flutter_launch_bg.py と同じ問題）。
+# 環境変数 WINDY_COMPARISON_OUT / WINDY_COMPARISON_SCAN があれば
+# コマンドライン引数より優先する。
+_args_out = os.environ.get("WINDY_COMPARISON_OUT") or None
+_scan_arg = os.environ.get("WINDY_COMPARISON_SCAN") or None
 for _i, _a in enumerate(sys.argv):
-    if _a == "--out" and _i + 1 < len(sys.argv):
+    if _a == "--out" and _i + 1 < len(sys.argv) and not _args_out:
         _args_out = sys.argv[_i + 1]
-    elif _a == "--scan" and _i + 1 < len(sys.argv):
-        pass   # 後段の SCAN_DIR で処理
-_scan_arg = None
-for _i, _a in enumerate(sys.argv):
-    if _a == "--scan" and _i + 1 < len(sys.argv):
+    elif _a == "--scan" and _i + 1 < len(sys.argv) and not _scan_arg:
         _scan_arg = sys.argv[_i + 1]
 
 OUT_DIR = _args_out or _config_output_dir() or SCRIPT_DIR
