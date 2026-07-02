@@ -216,13 +216,17 @@ classdef QT_ADL1 < handle
         end
 
         function waitForStop(obj)
+            % status == '?' は通信失敗・パース失敗（recv 空応答など）を示す。
+            % これを「移動完了」と誤判定すると、実際は移動中のまま次工程へ
+            % 進んでしまう危険があるため、'?' の間はリトライしてタイムアウト
+            % まで待つ（'D'=移動中と同様に扱う）。
             startTime = tic;
             while true
                 obj.send('Q:A0');
                 resp = obj.recv();
                 [~, status] = obj.parseStatusResponse(resp);
 
-                if ~strcmp(status, 'D')
+                if ~strcmp(status, 'D') && ~strcmp(status, '?')
                     if strcmp(status, 'L')
                         warning('[QT-ADL1] リミット検出による停止 (L)');
                     elseif strcmp(status, 'E')
@@ -234,7 +238,11 @@ classdef QT_ADL1 < handle
                 end
 
                 if toc(startTime) > obj.TIMEOUT_S
-                    warning('[QT-ADL1] waitForStop: タイムアウト (%.0f 秒)', obj.TIMEOUT_S);
+                    if strcmp(status, '?')
+                        warning('[QT-ADL1] waitForStop: 応答を取得できないままタイムアウトしました (%.0f 秒)', obj.TIMEOUT_S);
+                    else
+                        warning('[QT-ADL1] waitForStop: タイムアウト (%.0f 秒)', obj.TIMEOUT_S);
+                    end
                     return;
                 end
 
