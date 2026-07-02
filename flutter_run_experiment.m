@@ -101,11 +101,23 @@ met.origin_pulse   = cfg.origin_pulse;
 met.volt_offset_mV = cfg.volt_offset_mV;
 met.calib_a        = cfg.calib_a;
 met.calib_b        = cfg.calib_b;
-save_experiment_log_(ofst_log_path, date_str, met);
 
 % [バグ修正] Pofst でのみブロワー停止確認を行う。Mofst は連続実行。
 input('ブロワーが停止していることを確認したら Enter を押してください: ', 's');
 fprintf('\n');
+
+% 無風時の差圧電圧オフセットを自動計測し、cfg・met に反映する。
+% （代表風速計算・実験ログの両方で実測オフセットを使うため、無風確認後のここで確定させる。
+%   値渡しの run_ofst_phase_ 内で更新しても呼び出し元へ伝播しないため、トップレベルで行う）
+measured_offset = measure_volt_offset_(s_volt);
+if ~isnan(measured_offset)
+    cfg.volt_offset_mV = measured_offset;
+    met.volt_offset_mV = measured_offset;
+    fprintf('[更新] volt_offset_mV = %.4f mV\n\n', measured_offset);
+end
+
+% 実験ログ保存（実測オフセット反映後）
+save_experiment_log_(ofst_log_path, date_str, met);
 
 monitor.setConditionLabel('ofst');
 monitor.setPhase('Pofst');
@@ -227,14 +239,8 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
 
     fprintf('\n--- %s フェーズ開始 ---\n', phase);
 
-    % オフセット計測前の電圧オフセット自動取得（Pofst のみ）
-    if strcmp(phase, 'Pofst')
-        measured_offset = measure_volt_offset_(s_volt);
-        if ~isnan(measured_offset)
-            cfg.volt_offset_mV = measured_offset;
-            fprintf('[更新] volt_offset_mV = %.4f mV\n\n', measured_offset);
-        end
-    end
+    % 電圧オフセットの自動計測はトップレベル（無風確認直後）で行い、
+    % cfg・met に反映済みのためここでは行わない。
 
     delete_phase_data_(data_dir, phase);
     summary_fname = make_filename(date_str, '', phase, 0, 0, 'volt_summary');
