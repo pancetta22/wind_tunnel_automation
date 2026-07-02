@@ -56,12 +56,8 @@ classdef FlutterWindyMonitor < handle
         buf_nv_
         buf_v_
 
-        % 定数
+        % 定数（実行時に決まる値のみ。固定値は下の Constant セクションへ）
         sizeLimitKB_
-        BAR_X0
-        BAR_X1
-        BAR_Y0
-        BAR_Y1
 
         % 状態
         conditionLabel_   % 'c01', 'c02', 'ofst' など
@@ -84,6 +80,12 @@ classdef FlutterWindyMonitor < handle
         N_DISP_ROWS  = 3600      % 表示行数 = WINDOW_SEC * SENSOR_HZ
         TIMER_PERIOD = 0.15      % グラフ更新周期 [s]
 
+        % サイズ/秒数バーの描画座標（下部パネル内の正規化座標）
+        BAR_X0 = 0.02
+        BAR_X1 = 0.98
+        BAR_Y0 = 0.03
+        BAR_Y1 = 0.42
+
         % 表示用データ処理（保存CSVには非適用・表示専用）
         SMOOTH_WIN   = 7         % 移動平均窓 [点]（≈5.8ms / ノイズのみ除去）
         DECIM        = 4         % ダウンサンプリング間引き率
@@ -105,10 +107,6 @@ classdef FlutterWindyMonitor < handle
             obj.sizeLimitKB_    = sizeLimitKB;
             obj.buf_nv_         = 0;
             obj.buf_v_          = zeros(1, 600);
-            obj.BAR_X0          = 0.02;
-            obj.BAR_X1          = 0.98;
-            obj.BAR_Y0          = 0.03;
-            obj.BAR_Y1          = 0.42;
             obj.force_logger_fn_ = [];
             obj.force_timer_     = [];
             obj.ylim_force_      = [];

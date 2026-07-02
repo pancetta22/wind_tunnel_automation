@@ -53,12 +53,8 @@ classdef WindyMonitor < handle
         buf_nv_         % 電圧サンプル数
         buf_v_          % 1×M  差圧電圧 [mV]
 
-        % 定数
+        % 定数（実行時に決まる値のみ。固定値は下の Constant セクションへ）
         sizeLimitKB_
-        BAR_X0
-        BAR_X1
-        BAR_Y0
-        BAR_Y1
 
         % 一時停止
         paused_
@@ -76,6 +72,12 @@ classdef WindyMonitor < handle
     properties (Constant, Access = private)
         N_DISP_ROWS = 600
         TIMER_PERIOD = 0.15   % 6軸グラフ更新間隔 [s]（~7 Hz）
+
+        % サイズバーの描画座標（下部パネル内の正規化座標）
+        BAR_X0 = 0.02
+        BAR_X1 = 0.98
+        BAR_Y0 = 0.03
+        BAR_Y1 = 0.42
     end
 
     methods
@@ -89,11 +91,6 @@ classdef WindyMonitor < handle
 
             obj.buf_nv_ = 0;
             obj.buf_v_  = zeros(1, 600);
-
-            obj.BAR_X0 = 0.02;
-            obj.BAR_X1 = 0.98;
-            obj.BAR_Y0 = 0.03;
-            obj.BAR_Y1 = 0.42;
 
             obj.force_logger_fn_ = [];
             obj.force_timer_     = [];
