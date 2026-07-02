@@ -28,9 +28,10 @@ fprintf('========================================\n\n');
 % 前回の実行が Ctrl+C やエラーで中断されていた場合、COM ポートが掴まれた
 % ままになっている。残っている解放ガードをここでクリアして発火させ、
 % 前回分のデバイス接続を解放してから始める（"serialport unable to read" 対策）。
-clear windy_cleanup_guard_
-% さらに、ガード作成前（接続〜原点復帰の途中）で中断された場合はガード自体が
-% 無いため、ポートを掴んだままのデバイス変数も明示的に解放しておく。
+% 機器ごとに個別のガードを持たせるため、旧単一ガード名と合わせて全て掃除する。
+clear windy_cleanup_guard_ guard_stage_ guard_logger_ guard_volt_ guard_monitor_
+% さらに、ガード作成前（接続の途中）で中断された場合はガード自体が無いため、
+% ポートを掴んだままのデバイス変数も明示的に解放しておく。
 clear stage logger s_volt monitor
 
 % Python 設定の事前確認（leptrino=32bit 必須 / 後処理=64bit 推奨）。
@@ -65,25 +66,30 @@ photo_connected = false;   % 通風フェーズ前のカメラ接続確認を済
 % =====================================================================
 %  1. 機器接続
 % =====================================================================
+% 各機器の接続直後に個別の解放ガードを積む。接続の途中（例えば Leptrino や
+% R6441B の接続失敗）で例外が出ても、その時点までに確保したガードだけが残り、
+% 次回起動時の clear（上の掃除）で確実に解放される。単一ガードを全接続の
+% 成功後に積む旧方式では、接続途中で落ちると stage/logger が掴まれたまま
+% 残ってしまっていた。正常終了時は下の明示的な cleanup_devices_ も呼ぶが、
+% ガードと二重に発火しても安全（各解放は try/catch で保護）。
 fprintf('[接続] 迎角ステージ (%s) に接続中...\n', cfg.qt_adl1_port);
 stage = QT_ADL1(cfg.qt_adl1_port, [], cfg.origin_pulse);   % 原点パルスは config.json から
+guard_stage_ = onCleanup(@() safe_delete_(stage)); %#ok<NASGU>
 stage.homeReturn();
 
 fprintf('[接続] Leptrino センサ (ポート %d) を確認中...\n', cfg.leptrino_port);
 script_path = fullfile(fileparts(mfilename('fullpath')), 'leptrino', 'leptrino_server.py');
 logger = LeptrinoLogger(cfg.python_exe, script_path, ...
                         cfg.leptrino_port, cfg.force_sensor_size_limit_kb);
+guard_logger_ = onCleanup(@() safe_stop_(logger)); %#ok<NASGU>
 
 fprintf('[接続] R6441B デジボル (%s) に接続中...\n', cfg.r6441b_port);
 s_volt = connect_r6441b_(cfg.r6441b_port, cfg.r6441b_timeout_sec);
+guard_volt_ = onCleanup(@() safe_delete_(s_volt)); %#ok<NASGU>
 
 monitor = WindyMonitor(cfg.force_sensor_size_limit_kb);
 monitor.setDataSource(@() logger.getRecentRows(600));   % 6軸グラフ: 直近 0.5 秒をローリング表示
-
-% 解放ガード：スクリプトがエラーで止まっても、この変数がクリアされる時に
-% 必ず cleanup_devices_ が走り、COM ポート・Python プロセスを解放する。
-% （正常終了時の明示的な cleanup_devices_ と二重に呼ばれても安全）
-windy_cleanup_guard_ = onCleanup(@() cleanup_devices_(stage, logger, s_volt, monitor)); %#ok<NASGU>
+guard_monitor_ = onCleanup(@() safe_close_(monitor)); %#ok<NASGU>
 
 % =====================================================================
 %  2. 実験設定（気象条件・迎角範囲・開始フェーズ）
@@ -725,6 +731,26 @@ function cleanup_devices_(stage, logger, s_volt, monitor)
     try; delete(stage);   catch; end
     try; monitor.close(); catch; end
     clear logger;
+end
+
+% ---------------------------------------------------------------------
+%  機器ごとの個別解放ヘルパ（接続直後の onCleanup ガードから呼ばれる）。
+%  機器ごとに独立したガードにすることで、接続シーケンスの途中（Leptrino や
+%  R6441B の接続失敗）で例外が出ても、その時点までに確保済みの機器だけを
+%  確実に解放できる。正常終了時の cleanup_devices_ と二重に呼ばれても安全。
+% ---------------------------------------------------------------------
+function safe_stop_(logger)
+    fprintf('[終了] Leptrino センサの接続を閉じます...\n');
+    try; logger.stop(); catch; end
+end
+
+function safe_delete_(obj)
+    fprintf('[終了] 機器の接続を閉じます...\n');
+    try; delete(obj); catch; end
+end
+
+function safe_close_(monitor)
+    try; monitor.close(); catch; end
 end
 
 function met = input_met_conditions_()
