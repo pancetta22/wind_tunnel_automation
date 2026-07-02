@@ -256,82 +256,119 @@ function run_ofst_phase_(phase, data_dir, exp_dir, date_str, ...
     pts     = build_flutter_sequence_(phase, max_angle, angle_step);
     n_total = numel(pts);
 
-    for idx = 1:n_total
+    % ---- 計測点ループ ----
+    % QT_ADL1.moveToAngle はリミット停止・通信タイムアウト等で error を
+    % 送出するようになったため（迎角未到達のまま続行してデータを汚染しない
+    % ための変更）、ここで受け止めないと実験全体が中断してしまう。
+    % run_experiment.m ほど複雑なメニューは不要なため、最小限の
+    % 再試行/スキップ確認のみを行う（フェーズやり直し・実験終了は非対応）。
+    idx = 1;
+    while idx <= n_total
         pt = pts(idx);
-        fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
-        stage.moveToAngle(pt.target_angle);
-        fprintf('[%d/%d] 迎角 %+d° に到達\n', idx, n_total, pt.target_angle);
+        force_path    = '';
+        volt_raw_path = '';
+        try
+            fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
+            stage.moveToAngle(pt.target_angle);
+            fprintf('[%d/%d] 迎角 %+d° に到達\n', idx, n_total, pt.target_angle);
 
-        fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
-        pause(cfg.angle_settle_sec);
+            fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+            pause(cfg.angle_settle_sec);
 
-        t_now     = datetime('now');
-        time_str  = sprintf('%02d%02d%02d', hour(t_now), minute(t_now), floor(second(t_now)));
-        fname_force    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'full');
-        fname_volt_raw = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'volt_raw');
-        fname_short    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'short');
-        force_path     = fullfile(data_dir, fname_force);
-        volt_raw_path  = fullfile(data_dir, fname_volt_raw);
+            t_now     = datetime('now');
+            time_str  = sprintf('%02d%02d%02d', hour(t_now), minute(t_now), floor(second(t_now)));
+            fname_force    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'full');
+            fname_volt_raw = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'volt_raw');
+            fname_short    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'short');
+            force_path     = fullfile(data_dir, fname_force);
+            volt_raw_path  = fullfile(data_dir, fname_volt_raw);
 
-        monitor.resetGraph();
-        fprintf('[計測開始] 6軸センサ & デジボル 同時計測中（KB打ち切り）...\n');
+            monitor.resetGraph();
+            fprintf('[計測開始] 6軸センサ & デジボル 同時計測中（KB打ち切り）...\n');
 
-        logger.start(force_path);
-        pause(0.5);
+            logger.start(force_path);
+            pause(0.5);
 
-        if ~logger.isAlive()
-            warning('[フラッター実験] Leptrino プロセスの起動に失敗しました。');
-            continue;
-        end
+            if ~logger.isAlive()
+                error('windy:flutter:loggerStartFailed', ...
+                    '[フラッター実験] Leptrino プロセスの起動に失敗しました。');
+            end
 
-        flush(s_volt, 'input');
-        prev_timeout = s_volt.Timeout;
-        s_volt.Timeout = 0.8;
-        voltages = zeros(1, 500);
-        nv = 0;
-        n_consec_fail = 0;
+            flush(s_volt, 'input');
+            prev_timeout = s_volt.Timeout;
+            s_volt.Timeout = 0.8;
+            voltages = zeros(1, 500);
+            nv = 0;
+            n_consec_fail = 0;
 
-        while ~logger.isDone()
-            try
-                writeline(s_volt, 'MD?');
-                raw  = readline(s_volt);
-                v_mv = str2double(strtrim(raw)) * 1000;
-                if isnan(v_mv)
-                    n_consec_fail = n_consec_fail + 1;
-                else
-                    n_consec_fail = 0;
-                    nv = nv + 1;
-                    if nv > numel(voltages)
-                        voltages = [voltages, zeros(1, 200)]; %#ok<AGROW>
+            while ~logger.isDone()
+                try
+                    writeline(s_volt, 'MD?');
+                    raw  = readline(s_volt);
+                    v_mv = str2double(strtrim(raw)) * 1000;
+                    if isnan(v_mv)
+                        n_consec_fail = n_consec_fail + 1;
+                    else
+                        n_consec_fail = 0;
+                        nv = nv + 1;
+                        if nv > numel(voltages)
+                            voltages = [voltages, zeros(1, 200)]; %#ok<AGROW>
+                        end
+                        voltages(nv) = v_mv;
+                        sz_kb = logger.getSizeKB();
+                        fprintf('  6軸: %6.1f KB / %.0f KB  |  デジボル: %3d サンプル (%.2f mV)\r', ...
+                            sz_kb, cfg.force_sensor_size_limit_kb, nv, v_mv);
+                        % Pofst/Mofst はKBベースなのでsize_kb/limit_kbをそのまま使う
+                        prog = struct('idx', idx, 'total', n_total, ...
+                                      'size_kb', sz_kb, 'limit_kb', cfg.force_sensor_size_limit_kb);
+                        monitor.update(pt.target_angle, v_mv, prog);
                     end
-                    voltages(nv) = v_mv;
-                    sz_kb = logger.getSizeKB();
-                    fprintf('  6軸: %6.1f KB / %.0f KB  |  デジボル: %3d サンプル (%.2f mV)\r', ...
-                        sz_kb, cfg.force_sensor_size_limit_kb, nv, v_mv);
-                    % Pofst/Mofst はKBベースなのでsize_kb/limit_kbをそのまま使う
-                    prog = struct('idx', idx, 'total', n_total, ...
-                                  'size_kb', sz_kb, 'limit_kb', cfg.force_sensor_size_limit_kb);
-                    monitor.update(pt.target_angle, v_mv, prog);
+                catch
+                    n_consec_fail = n_consec_fail + 1;
                 end
-            catch
-                n_consec_fail = n_consec_fail + 1;
+                if n_consec_fail == 30
+                    warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+                end
+                pause(0.1);
             end
-            if n_consec_fail == 30
-                warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+            s_volt.Timeout = prev_timeout;
+            voltages = voltages(1:nv);
+            fprintf('\n');
+
+            logger.waitForFinish();
+            logger.getResult(); %#ok<NASGU>
+
+            % ---- 計測量の妥当性チェック（run_experiment.m と同じ趣旨）----
+            % Python プロセスが計測途中で死んだ場合、isDone はプロセス終了側の
+            % 条件で true になるためデータ不足のまま「成功」扱いになってしまう。
+            sz_kb = logger.getSizeKB();
+            if sz_kb < 0.8 * cfg.force_sensor_size_limit_kb
+                error('windy:flutter:sizeShortfall', ...
+                    ['[計測量不足] 6軸センサCSVが %.1f KB しかありません（目標 %.0f KB）。\n' ...
+                     '  計測途中でセンサプロセスが終了した可能性があります。'], ...
+                    sz_kb, cfg.force_sensor_size_limit_kb);
             end
-            pause(0.1);
+
+            save_volt_raw_(volt_raw_path, voltages);
+            append_volt_summary_(summary_path, idx - 1, pt.target_angle, fname_short, voltages);
+            fprintf('[保存] %s\n', fname_force);
+            fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
+
+            idx = idx + 1;   % 正常完了 → 次の計測点へ
+
+        catch ME_meas
+            action_str = ask_flutter_error_action_(ME_meas, phase, idx, n_total);
+            try; logger.stop(); catch; end
+            delete_point_files_(force_path, volt_raw_path);
+            switch action_str
+                case 'retry'
+                    fprintf('[再試行] 計測点 %d/%d を再試行します。\n\n', idx, n_total);
+                    % idx は変えない
+                case 'skip'
+                    fprintf('[スキップ] 計測点 %d/%d をスキップします。\n\n', idx, n_total);
+                    idx = idx + 1;
+            end
         end
-        s_volt.Timeout = prev_timeout;
-        voltages = voltages(1:nv);
-        fprintf('\n');
-
-        logger.waitForFinish();
-        logger.getResult(); %#ok<NASGU>
-
-        save_volt_raw_(volt_raw_path, voltages);
-        append_volt_summary_(summary_path, idx - 1, pt.target_angle, fname_short, voltages);
-        fprintf('[保存] %s\n', fname_force);
-        fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
     end
 
     % フェーズ終了後に迎角を 0° に戻す
@@ -358,86 +395,108 @@ function run_data_phase_(phase, data_dir, exp_dir, date_str, ...
     pts     = build_flutter_sequence_(phase, max_angle, angle_step);
     n_total = numel(pts);
 
-    for idx = 1:n_total
+    % 計測点ループ（run_ofst_phase_ と同じ理由で try/catch＋再試行/スキップを持つ。
+    % QT_ADL1.moveToAngle が異常停止時に error を送出するようになったため）。
+    idx = 1;
+    while idx <= n_total
         pt = pts(idx);
-        fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
-        stage.moveToAngle(pt.target_angle);
-        fprintf('[%d/%d] 迎角 %+d° に到達\n', idx, n_total, pt.target_angle);
+        force_path    = '';
+        volt_raw_path = '';
+        try
+            fprintf('[%d/%d] 迎角 %+d° へ移動中...\n', idx, n_total, pt.target_angle);
+            stage.moveToAngle(pt.target_angle);
+            fprintf('[%d/%d] 迎角 %+d° に到達\n', idx, n_total, pt.target_angle);
 
-        fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
-        pause(cfg.angle_settle_sec);
+            fprintf('[待機] 振動収束待ち... %.1f 秒\n', cfg.angle_settle_sec);
+            pause(cfg.angle_settle_sec);
 
-        t_now     = datetime('now');
-        time_str  = sprintf('%02d%02d%02d', hour(t_now), minute(t_now), floor(second(t_now)));
-        fname_force    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'full');
-        fname_volt_raw = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'volt_raw');
-        fname_short    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'short');
-        force_path     = fullfile(data_dir, fname_force);
-        volt_raw_path  = fullfile(data_dir, fname_volt_raw);
+            t_now     = datetime('now');
+            time_str  = sprintf('%02d%02d%02d', hour(t_now), minute(t_now), floor(second(t_now)));
+            fname_force    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'full');
+            fname_volt_raw = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'volt_raw');
+            fname_short    = make_filename(date_str, time_str, phase, pt.ref_angle, pt.suffix, 'short');
+            force_path     = fullfile(data_dir, fname_force);
+            volt_raw_path  = fullfile(data_dir, fname_volt_raw);
 
-        monitor.resetGraph();
-        fprintf('[計測開始] 6軸センサ & デジボル 同時計測中（%.1f 秒）...\n', measure_sec);
+            monitor.resetGraph();
+            fprintf('[計測開始] 6軸センサ & デジボル 同時計測中（%.1f 秒）...\n', measure_sec);
 
-        logger.start(force_path, measure_sec);
-        pause(0.5);
+            logger.start(force_path, measure_sec);
+            pause(0.5);
 
-        if ~logger.isAlive()
-            warning('[フラッター実験] Leptrino プロセスの起動に失敗しました。');
-            continue;
-        end
+            if ~logger.isAlive()
+                error('windy:flutter:loggerStartFailed', ...
+                    '[フラッター実験] Leptrino プロセスの起動に失敗しました。');
+            end
 
-        flush(s_volt, 'input');
-        prev_timeout = s_volt.Timeout;
-        s_volt.Timeout = 0.8;
-        voltages = zeros(1, 2000);
-        nv = 0;
-        n_consec_fail = 0;
+            flush(s_volt, 'input');
+            prev_timeout = s_volt.Timeout;
+            s_volt.Timeout = 0.8;
+            voltages = zeros(1, 2000);
+            nv = 0;
+            n_consec_fail = 0;
 
-        while ~logger.isDone()
-            try
-                writeline(s_volt, 'MD?');
-                raw  = readline(s_volt);
-                v_mv = str2double(strtrim(raw)) * 1000;
-                if isnan(v_mv)
-                    n_consec_fail = n_consec_fail + 1;
-                else
-                    n_consec_fail = 0;
-                    nv = nv + 1;
-                    if nv > numel(voltages)
-                        voltages = [voltages, zeros(1, 500)]; %#ok<AGROW>
+            while ~logger.isDone()
+                try
+                    writeline(s_volt, 'MD?');
+                    raw  = readline(s_volt);
+                    v_mv = str2double(strtrim(raw)) * 1000;
+                    if isnan(v_mv)
+                        n_consec_fail = n_consec_fail + 1;
+                    else
+                        n_consec_fail = 0;
+                        nv = nv + 1;
+                        if nv > numel(voltages)
+                            voltages = [voltages, zeros(1, 500)]; %#ok<AGROW>
+                        end
+                        voltages(nv) = v_mv;
+                        elapsed = logger.getElapsedSec();
+                        fprintf('  経過: %5.1f / %.1f 秒  |  デジボル: %3d サンプル (%.2f mV)\r', ...
+                            elapsed, measure_sec, nv, v_mv);
+                        % 秒数ベースのプログレス（0〜1 を limit_kb スケールに変換して渡す）
+                        prog = struct('idx', idx, 'total', n_total, ...
+                                      'elapsed_sec', elapsed, 'limit_sec', measure_sec);
+                        monitor.update(pt.target_angle, v_mv, prog);
                     end
-                    voltages(nv) = v_mv;
-                    elapsed = logger.getElapsedSec();
-                    fprintf('  経過: %5.1f / %.1f 秒  |  デジボル: %3d サンプル (%.2f mV)\r', ...
-                        elapsed, measure_sec, nv, v_mv);
-                    % 秒数ベースのプログレス（0〜1 を limit_kb スケールに変換して渡す）
-                    prog = struct('idx', idx, 'total', n_total, ...
-                                  'elapsed_sec', elapsed, 'limit_sec', measure_sec);
-                    monitor.update(pt.target_angle, v_mv, prog);
+                catch
+                    n_consec_fail = n_consec_fail + 1;
                 end
-            catch
-                n_consec_fail = n_consec_fail + 1;
+                if n_consec_fail == 30
+                    warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+                end
+                pause(0.1);
             end
-            if n_consec_fail == 30
-                warning('[R6441B] 応答の取得に連続で失敗しています（%d回）。接続を確認してください。', n_consec_fail);
+            s_volt.Timeout = prev_timeout;
+            voltages = voltages(1:nv);
+            fprintf('\n');
+
+            logger.waitForFinish();
+            res = logger.getResult();
+            if isfield(res, 'duration_sec')
+                fprintf('[計測完了] %.2f 秒  |  6軸: %.1f KB  |  デジボル: %d サンプル\n', ...
+                    res.duration_sec, res.size_kb, nv);
             end
-            pause(0.1);
-        end
-        s_volt.Timeout = prev_timeout;
-        voltages = voltages(1:nv);
-        fprintf('\n');
 
-        logger.waitForFinish();
-        res = logger.getResult();
-        if isfield(res, 'duration_sec')
-            fprintf('[計測完了] %.2f 秒  |  6軸: %.1f KB  |  デジボル: %d サンプル\n', ...
-                res.duration_sec, res.size_kb, nv);
-        end
+            save_volt_raw_(volt_raw_path, voltages);
+            append_volt_summary_(summary_path, idx - 1, pt.target_angle, fname_short, voltages);
+            fprintf('[保存] %s\n', fname_force);
+            fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
 
-        save_volt_raw_(volt_raw_path, voltages);
-        append_volt_summary_(summary_path, idx - 1, pt.target_angle, fname_short, voltages);
-        fprintf('[保存] %s\n', fname_force);
-        fprintf('[更新] %s に追記 (%d/%d 点完了)\n\n', summary_fname, idx, n_total);
+            idx = idx + 1;   % 正常完了 → 次の計測点へ
+
+        catch ME_meas
+            action_str = ask_flutter_error_action_(ME_meas, phase, idx, n_total);
+            try; logger.stop(); catch; end
+            delete_point_files_(force_path, volt_raw_path);
+            switch action_str
+                case 'retry'
+                    fprintf('[再試行] 計測点 %d/%d を再試行します。\n\n', idx, n_total);
+                    % idx は変えない
+                case 'skip'
+                    fprintf('[スキップ] 計測点 %d/%d をスキップします。\n\n', idx, n_total);
+                    idx = idx + 1;
+            end
+        end
     end
 
     % フェーズ終了後に迎角を 0° に戻す
@@ -852,5 +911,50 @@ function v = ask_int_(prompt, lo, hi)
             v = val; return
         end
         fprintf('  ※ %d〜%d の整数を入力してください。\n', lo, hi);
+    end
+end
+
+function action = ask_flutter_error_action_(ME, phase, idx, n_total)
+    % 計測点エラー時にユーザーへ対処を確認する（run_experiment.m の
+    % ask_error_action_ の簡易版。フラッター実験は単調スイープのみで
+    % フェーズやり直し・実験終了メニューまでは持たない）。
+    fprintf('\n');
+    fprintf('════════════════════════════════════════\n');
+    fprintf('  [エラー] 計測点 %d/%d でエラーが発生しました\n', idx, n_total);
+    fprintf('  フェーズ: %s\n', phase);
+    fprintf('  内容: %s\n', ME.message);
+    fprintf('════════════════════════════════════════\n\n');
+    fprintf('どうしますか？\n');
+    fprintf('  R: この計測点を再試行する\n');
+    fprintf('  S: この点をスキップして続ける\n\n');
+
+    valid = {'R', 'S'};
+    while true
+        choice = upper(strtrim(input('選択 [R/S]: ', 's')));
+        if ismember(choice, valid), break; end
+        fprintf('  ※ R, S のいずれかを入力してください。\n');
+    end
+    fprintf('\n');
+
+    switch choice
+        case 'R'; action = 'retry';
+        case 'S'; action = 'skip';
+    end
+end
+
+function delete_point_files_(varargin)
+    % 失敗した計測点の部分ファイルを削除する（リトライ/スキップ時の重複防止）。
+    % ファイル名確定前にエラーが起きた場合はパスが空文字なので何もしない。
+    for i = 1:nargin
+        p = varargin{i};
+        if ~isempty(p) && isfile(p)
+            try
+                delete(p);
+                [~, n, e] = fileparts(p);
+                fprintf('[削除] 失敗点の部分ファイル: %s%s\n', n, e);
+            catch
+                fprintf('[警告] 部分ファイルを削除できませんでした: %s\n', p);
+            end
+        end
     end
 end
