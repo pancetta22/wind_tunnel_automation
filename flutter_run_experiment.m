@@ -27,7 +27,7 @@ fprintf('  Windy フラッター実験自動計測システム\n');
 fprintf('========================================\n\n');
 
 % 前回の中断で残ったCOMポート等を解放
-clear flutter_cleanup_guard_
+clear guard_stage_ guard_logger_ guard_volt_ guard_monitor_
 clear stage logger s_volt monitor
 
 % Python ビット数の確認
@@ -45,24 +45,29 @@ fprintf('\n');
 % =====================================================================
 %  1. 機器接続
 % =====================================================================
+% 各機器の接続直後に個別の解放ガードを積む。接続の途中（例えば Leptrino や
+% R6441B の接続失敗）で例外が出ても、その時点までに確保したガードは
+% スコープ終了時に発火して確実に解放される（onCleanup はローカル変数の
+% スコープ消滅時に発火するため、関数内であれば中断・エラー時も機能する）。
 fprintf('[接続] 迎角ステージ (%s) に接続中...\n', cfg.qt_adl1_port);
 stage = QT_ADL1(cfg.qt_adl1_port, [], cfg.origin_pulse);
 stage.homeReturn();
+guard_stage_ = onCleanup(@() safe_delete_(stage)); %#ok<NASGU>
 
 fprintf('[接続] Leptrino センサ (ポート %d) を確認中...\n', cfg.leptrino_port);
 script_path = fullfile(fileparts(mfilename('fullpath')), 'leptrino', 'leptrino_server.py');
 logger = LeptrinoLogger(cfg.python_exe, script_path, ...
                         cfg.leptrino_port, cfg.force_sensor_size_limit_kb);
+guard_logger_ = onCleanup(@() safe_stop_(logger)); %#ok<NASGU>
 
 fprintf('[接続] R6441B デジボル (%s) に接続中...\n', cfg.r6441b_port);
 s_volt = connect_r6441b_(cfg.r6441b_port, cfg.r6441b_timeout_sec);
+guard_volt_ = onCleanup(@() safe_delete_(s_volt)); %#ok<NASGU>
 
 % FlutterWindyMonitor を使用（秒数表示・ケース名表示に対応）
 monitor = FlutterWindyMonitor(cfg.force_sensor_size_limit_kb);
 monitor.setDataSource(@() logger.getRecentRows(3600));  % 直近3秒分（= 3.0s × 1200Hz）
-
-% 解放ガード
-flutter_cleanup_guard_ = onCleanup(@() cleanup_devices_(stage, logger, s_volt, monitor)); %#ok<NASGU>
+guard_monitor_ = onCleanup(@() safe_close_(monitor)); %#ok<NASGU>
 
 % =====================================================================
 %  2. 実験設定（気象条件・迎角範囲・計測秒数）
@@ -225,7 +230,8 @@ try; stage.moveToAngle(0); catch; end
 %   実験終了後なので LCO 付きで実行。失敗しても続行（warning のみ）。
 flutter_run_postprocess(base_exp_dir, 'base', cfg, true);
 
-cleanup_devices_(stage, logger, s_volt, monitor);
+% 機器解放は guard_stage_/guard_logger_/guard_volt_/guard_monitor_ が
+% スクリプト終了時のスコープ消滅で自動的に行う（onCleanup）。
 
 
 % =====================================================================
@@ -775,11 +781,21 @@ function delete_phase_data_(data_dir, phase)
     end
 end
 
-function cleanup_devices_(stage, logger, s_volt, monitor)
+function safe_stop_(logger)
+    % onCleanup から呼ばれる個別解放ヘルパー。
+    % 機器ごとに独立した onCleanup ガードにすることで、接続シーケンスの
+    % 途中（例えば Leptrino や R6441B の接続失敗）で例外が出ても、その
+    % 時点までに確保済みの機器だけを確実に解放できる。
+    fprintf('[終了] Leptrino センサの接続を閉じます...\n');
+    try; logger.stop(); catch; end
+end
+
+function safe_delete_(obj)
     fprintf('[終了] 機器の接続を閉じます...\n');
-    try; logger.stop();   catch; end
-    try; delete(s_volt);  catch; end
-    try; delete(stage);   catch; end
+    try; delete(obj); catch; end
+end
+
+function safe_close_(monitor)
     try; monitor.close(); catch; end
 end
 
@@ -790,9 +806,9 @@ function check_python_bits_(python_exe, want_bits, label)
         error('[設定確認] %s を実行できません: %s', label, python_exe);
     end
     bits = str2double(strtrim(out));
-    if ~isnan(bits) && bits ~= want_bits && want_bits == 32
-        error(['[設定確認] %s は %dbit Python です（32bit が必要）。\n' ...
-               '  config.json の python_exe に 32bit Python のパスを設定してください。'], label, bits);
+    if ~isnan(bits) && bits ~= want_bits
+        error(['[設定確認] %s は %dbit Python です（%dbit が必要）。\n' ...
+               '  config.json のパス設定を確認してください。'], label, bits, want_bits);
     end
 end
 
