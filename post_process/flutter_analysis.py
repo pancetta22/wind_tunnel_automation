@@ -52,6 +52,8 @@ import re
 import sys
 import traceback
 import warnings
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 
 import numpy as np
 import pandas as pd
@@ -205,6 +207,15 @@ def parse_args():
                    help="ストローハル数図（strouhal_fu）で loop_thickness が st_clear_thk を"
                         "超えるノイズ的な点を完全に非表示にする（--lco 併用時のみ有効）")
 
+    # ---- 高速化オプション ----
+    p.add_argument("--workers", type=int, default=None,
+                   help="計測点処理の並列ワーカー数。1で従来同様の逐次実行（トラブル時の"
+                        "切り分け用）。デフォルト: min(8, CPUコア数-2)。数値出力は"
+                        "ワーカー数によらず同一")
+    p.add_argument("--hq", action="store_true",
+                   help="計測点ごとの図を従来品質で出力する（間引きなし・bbox_inches='tight'）。"
+                        "既定は高速な軽量描画（min/max間引き。波形の外形・スパイクは保存される）")
+
     # ---- LCO（リミットサイクル振動）非線形動力学解析（オプトイン） ----
     p.add_argument("--lco", action="store_true",
                    help="LCO非線形解析（位相図・Poincaré・調和指標・成長率）を有効化")
@@ -282,6 +293,9 @@ def resample_uniform(t, x, fs=FS_TARGET):
     重複除去後の点数が cubic 補間の次数（4点必要）に満たない場合は
     ValueError を送出する。呼び出し側で短すぎるデータ点をスキップする
     判断ができるようにするため。
+
+    x は 1D（1成分）のほか、(n, m) の 2D も受け付ける（m 成分をまとめて
+    1回のスプライン構築で補間。数値は成分ごとに1Dで呼んだ場合と同一）。
     """
     # 狭義単調増加になるよう、t が増加しない点を除外（最初の出現を残す）
     keep = np.concatenate(([True], np.diff(t) > 0))
@@ -296,8 +310,33 @@ def resample_uniform(t, x, fs=FS_TARGET):
 
     t_uniform = np.arange(t[0], t[-1], 1.0 / fs)
     f_interp  = interpolate.interp1d(t, x, kind="cubic", bounds_error=False,
-                                      fill_value="extrapolate")
+                                      fill_value="extrapolate", axis=0)
     return t_uniform, f_interp(t_uniform)
+
+
+def decimate_minmax(t, x, n_bins=3000):
+    """描画専用の min/max エンベロープ間引き。
+
+    時系列をビン分割し、各ビンの最小値・最大値を折れ線として並べる。
+    波形の外形・スパイクを保存したまま点数を 2*n_bins に落とす
+    （3.5万点 → 6000点で描画コストを大幅削減。見た目はほぼ同一）。
+    数値解析には使わないこと（描画専用）。
+    """
+    t = np.asarray(t)
+    x = np.asarray(x)
+    n = len(x)
+    if n <= 2 * n_bins:
+        return t, x
+    edges  = np.linspace(0, n, n_bins + 1).astype(int)
+    starts = edges[:-1]
+    mins = np.minimum.reduceat(x, starts)
+    maxs = np.maximum.reduceat(x, starts)
+    t_mid = t[np.minimum((starts + edges[1:]) // 2, n - 1)]
+    out_t = np.repeat(t_mid, 2)
+    out_x = np.empty(2 * n_bins, dtype=float)
+    out_x[0::2] = mins
+    out_x[1::2] = maxs
+    return out_t, out_x
 
 
 def highpass(x, cutoff_hz, fs=FS_TARGET, order=4):
@@ -485,27 +524,29 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
         return None
 
     t  = df["t"].values
-    Fy = df["Fy"].values
-    Mz = df["Mz"].values
 
-    # ---- Pofst / Mofst によるオフセット補正 ----
+    # ---- Pofst / Mofst によるオフセット補正（6成分まとめて） ----
+    comp_names = ["Fy", "Mz"] + list(EXTRA_RMS_COMPS)
+    X = df[comp_names].values          # (n, 6)
     ofst_key = find_ofst_key(fname, ofst, phase)
     if ofst_key:
-        Fy = Fy - ofst[ofst_key]["Fy"]
-        Mz = Mz - ofst[ofst_key]["Mz"]
+        X = X - np.array([ofst[ofst_key][c] for c in comp_names])
     else:
         warnings.warn(f"オフセットキーが見つかりません: {fname}")
 
     # ---- 均一グリッドへリサンプリング ----
+    # 6成分を (n,6) のまま渡し、スプライン構築を1回で済ませる（数値は
+    # 成分ごとに呼んだ場合と同一）。
     # len(df)>=100 でも重複タイムスタンプ除去後に4点未満まで減ることがあり、
     # その場合 resample_uniform が ValueError を送出する。他の点の処理を
     # 止めないよう、この1点だけ warning でスキップする。
     try:
-        t_u, Fy_u = resample_uniform(t, Fy)
-        _,   Mz_u = resample_uniform(t, Mz)
+        t_u, X_u = resample_uniform(t, X)
     except ValueError as e:
         warnings.warn(f"リサンプリング失敗のためスキップ: {fname}（{e}）")
         return None
+    Fy_u = X_u[:, 0]
+    Mz_u = X_u[:, 1]
 
     # ---- 両端トリミングの範囲を決定 ----
     # 補間段差・ハイパス端トランジェントが 0s/30s 付近に作る非物理的スパイクを
@@ -538,14 +579,11 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
 
     # ---- 追加成分のRMS（Fx/Fz/Mx/My：RMSのみ） ----
     # Fy/Mz と同じ処理（オフセット補正→リサンプリング→平均引き→ハイパス→トリム→RMS）。
-    # ofst_key は上で解決済み・成分非依存なので再利用し、warning も重複させない。
+    # オフセット補正・リサンプリングは冒頭の6成分一括処理（X_u）で済んでいる。
     rms_extra = {}
-    for comp in EXTRA_RMS_COMPS:
-        x = df[comp].values
-        if ofst_key:
-            x = x - ofst[ofst_key][comp]
-        _, x_u = resample_uniform(t, x)
-        x_hp   = highpass(x_u - np.mean(x_u), args.hp_cutoff)[sl]
+    for k, comp in enumerate(EXTRA_RMS_COMPS):
+        x_u  = X_u[:, 2 + k]
+        x_hp = highpass(x_u - np.mean(x_u), args.hp_cutoff)[sl]
         rms_extra[f"rms_{comp}"] = float(np.sqrt(np.mean(x_hp ** 2)))
 
     # ---- raw版RMS（Fy_raw_hp/Mz_raw_hp は上で算出済み） ----
@@ -574,7 +612,8 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
     _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
                 freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
                 t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa,
-                case_name=case_name, rep_U=rep_U)
+                case_name=case_name, rep_U=rep_U,
+                hq=getattr(args, "hq", False))
 
     # ---- この計測点の平均風速（volt_summary の平均差圧電圧から算出） ----
     # 代表風速（各条件の冒頭1点）ではなく、当該計測データ全体の平均を使う。
@@ -616,9 +655,17 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
 def _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
                 freqs_Fy, psd_Fy, freqs_Mz, psd_Mz,
                 t_rms_Fy, rms_t_Fy, t_rms_Mz, rms_t_Mz, aoa,
-                case_name="", rep_U=None):
+                case_name="", rep_U=None, hq=False):
 
     os.makedirs(fig_dir, exist_ok=True)
+
+    # 軽量モード（既定）: 時系列を min/max エンベロープで間引いて描画コストを削減。
+    # --hq 時は従来どおり全点を描く。
+    if hq:
+        dec = lambda t, x: (t, x)
+    else:
+        plt.rcParams["path.simplify_threshold"] = 1.0
+        dec = decimate_minmax
 
     title = f"AoA = {aoa:+d}°"
     if case_name:
@@ -631,13 +678,13 @@ def _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
     fig.suptitle(title, fontsize=13)
 
     # --- 上段: 時系列（オフセット補正済み・平均引き済み） ---
-    axes[0, 0].plot(t_u, Fy_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
-    axes[0, 0].plot(t_u, Fy_hp, lw=0.8, color="red",      alpha=0.9, label="Flutter comp. (HP)")
+    axes[0, 0].plot(*dec(t_u, Fy_u), lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
+    axes[0, 0].plot(*dec(t_u, Fy_hp), lw=0.8, color="red",      alpha=0.9, label="Flutter comp. (HP)")
     axes[0, 0].set_xlabel("Time [s]"); axes[0, 0].set_ylabel("Fy [N]")
     axes[0, 0].set_title("Fy time series"); axes[0, 0].legend(fontsize=8); axes[0, 0].grid(True)
 
-    axes[0, 1].plot(t_u, Mz_u, lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
-    axes[0, 1].plot(t_u, Mz_hp, lw=0.8, color="red",      alpha=0.9, label="Flutter comp. (HP)")
+    axes[0, 1].plot(*dec(t_u, Mz_u), lw=0.5, color="steelblue", alpha=0.7, label="Pofst-corrected")
+    axes[0, 1].plot(*dec(t_u, Mz_hp), lw=0.8, color="red",      alpha=0.9, label="Flutter comp. (HP)")
     axes[0, 1].set_xlabel("Time [s]"); axes[0, 1].set_ylabel("Mz [Nm]")
     axes[0, 1].set_title("Mz time series"); axes[0, 1].legend(fontsize=8); axes[0, 1].grid(True)
 
@@ -660,14 +707,127 @@ def _plot_point(fig_dir, short, t_u, Fy_u, Mz_u, Fy_hp, Mz_hp,
     axes[2, 1].set_title(f"Mz RMS trend (window={RMS_WINDOW_SEC}s)"); axes[2, 1].grid(True)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(fig_dir, f"{short}.png"), dpi=120, bbox_inches="tight")
+    # --hq 時のみ bbox_inches="tight"（再レイアウトが重いため軽量モードでは省く）
+    save_kw = {"bbox_inches": "tight"} if hq else {}
+    fig.savefig(os.path.join(fig_dir, f"{short}.png"), dpi=120, **save_kw)
     plt.close(fig)
+
+
+# ============================================================
+#  計測点処理の並列実行
+# ============================================================
+def effective_workers(args):
+    """--workers の実効値を返す。未指定なら min(8, CPUコア数-2)。"""
+    w = getattr(args, "workers", None)
+    if w is not None:
+        return max(1, int(w))
+    return min(8, max(1, (os.cpu_count() or 2) - 2))
+
+
+def _limit_blas_threads():
+    """ワーカー並列と BLAS 内部スレッドの掛け算でコアを取り合わないよう、
+    数値ライブラリのスレッド数を1に制限する。
+
+    spawn される子プロセスへ環境変数として継承される。ユーザーが明示的に
+    設定済みの値は尊重する（setdefault）。
+    """
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
+
+
+class _executor_context:
+    """--workers に応じて ProcessPoolExecutor を with 文で貸し出す（実効1なら None=逐次）。
+
+    ワーカープロセスの異常死（BrokenProcessPool）はここで捕捉し、
+    `--workers 1` での再実行を促すメッセージを添えて再送出する。
+    """
+
+    def __init__(self, args):
+        self.n = effective_workers(args)
+        self.executor = None
+
+    def __enter__(self):
+        if self.n > 1:
+            _limit_blas_threads()
+            print(f"[並列] {self.n} ワーカーで計測点を処理します"
+                  f"（--workers 1 で従来同様の逐次実行に戻せます）")
+            self.executor = ProcessPoolExecutor(max_workers=self.n)
+        return self.executor
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.executor is not None:
+            self.executor.shutdown(wait=True, cancel_futures=True)
+        if exc_type is not None and issubclass(exc_type, BrokenProcessPool):
+            print("[エラー] 並列ワーカーが異常終了しました。"
+                  " `--workers 1` を付けて逐次実行で再実行してください。",
+                  file=sys.stderr)
+        return False
+
+
+def _point_worker(task):
+    """1計測点ぶんの処理（process_one_point + --lco 時は LCO 解析・カルテ図）。
+
+    ProcessPoolExecutor のワーカーとしても、逐次実行（--workers 1）からも
+    同じ関数を呼ぶ（並列の有無で数値・挙動が変わらないことを保証するため）。
+
+    例外・警告はワーカー内で捕捉して文字列で返し、メイン側で表示する
+    （1点の失敗で全体を止めない。tqdm 表示との混線も避ける）。
+
+    Returns
+    -------
+    (index, result, spec_row, lco_row, messages)
+        result が None の場合はこの点をスキップ（理由は messages に入る）。
+    """
+    (index, csv_path, ofst, phase, args, fig_dir,
+     case_name, rep_U, ws_params, volt_means) = task
+    fname = os.path.basename(csv_path)
+    msgs = []
+    result = spec_row = lco_row = None
+    try:
+        with warnings.catch_warnings(record=True) as wlist:
+            warnings.simplefilter("always")
+            result = process_one_point(
+                csv_path, ofst, phase, args, fig_dir,
+                case_name=case_name, rep_U=rep_U, ws_params=ws_params,
+                volt_means=volt_means
+            )
+            if result is not None:
+                # スペクトル配列は DataFrame に混ぜず別リストへ退避
+                spec_row = {
+                    "aoa":    result["aoa"],
+                    "mean_U": result["mean_U"],
+                    "freqs":  result.pop("_psd_freqs"),
+                    "psd_Fy": result.pop("_psd_Fy"),
+                    "psd_Mz": result.pop("_psd_Mz"),
+                }
+                # 補正済み信号は --lco 有無に関わらずワーカー内で消費して捨てる
+                # （大配列を親プロセスへ pickle 転送しない）
+                sig_t = result.pop("_t")
+                sigs  = {"Fy": result.pop("_sig_Fy"), "Mz": result.pop("_sig_Mz")}
+                if args.lco:
+                    # 遅延 import（lco_analysis が flutter_analysis を import する
+                    # ため、トップレベル import だと循環参照になる）
+                    import lco_analysis
+                    lco_res = lco_analysis.analyze_point(
+                        sig_t, sigs, result["aoa"],
+                        short=_short_name(fname), fig_dir=fig_dir, args=args,
+                        case_name=case_name, rep_U=rep_U
+                    )
+                    # 指標を summary 行へマージ（自動列追加。自動ラベルは付けない）
+                    result.update(lco_res["metrics"])
+                    lco_row = lco_res["row"]
+        msgs.extend(str(w.message) for w in wlist)
+    except Exception:
+        result = spec_row = lco_row = None
+        msgs.append(f"処理失敗のためスキップ: {fname}\n{traceback.format_exc()}")
+    return index, result, spec_row, lco_row, msgs
 
 
 # ============================================================
 #  Layer 2: 1条件の処理
 # ============================================================
-def process_one_condition(exp_dir, ofst, args):
+def process_one_condition(exp_dir, ofst, args, executor=None):
     """1つの風速条件フォルダ（_c01 など）を処理してサマリーCSVを出力する。"""
 
     log = load_log(exp_dir)
@@ -701,51 +861,48 @@ def process_one_condition(exp_dir, ofst, args):
     date_str = m_date.group(1) if m_date else str(log.get("date", ""))
     volt_means = load_volt_summary_means(exp_dir, date_str)
 
-    # LCO解析は遅延 import（lco_analysis が flutter_analysis を import するため、
-    # トップレベル import だと循環参照になる。--lco 時のみ読み込む）
-    if args.lco:
-        import lco_analysis
+    tasks = [
+        (i, os.path.join(data_dir, fname),
+         ofst, "Pdata" if "_Pdata_" in fname else "Mdata", args, fig_dir,
+         case_name, rep_U, ws_params, volt_means)
+        for i, fname in enumerate(files)
+    ]
+
+    # index -> (result, spec_row, lco_row) で受け取り、元のファイル順に復元してから
+    # rows / spec_rows / lco_rows へ積む（--workers の値によらず出力が同一になるようにする）。
+    ordered = [None] * len(tasks)
+    desc = f"  {os.path.basename(exp_dir)}"
+    if executor is not None:
+        for index, result, spec_row, lco_row, msgs in tqdm(
+            executor.map(_point_worker, tasks), total=len(tasks), desc=desc, ncols=70
+        ):
+            for m in msgs:
+                tqdm.write(f"  [警告] {m}")
+            ordered[index] = (result, spec_row, lco_row)
+    else:
+        for task in tqdm(tasks, desc=desc, ncols=70):
+            index, result, spec_row, lco_row, msgs = _point_worker(task)
+            for m in msgs:
+                tqdm.write(f"  [警告] {m}")
+            ordered[index] = (result, spec_row, lco_row)
 
     rows = []
     spec_rows = []   # 迎角×周波数マップ用のスペクトル配列
     lco_rows  = []   # LCO非線形解析（--lco 時のみ）の結果・中間生成物
-    for fname in tqdm(files, desc=f"  {os.path.basename(exp_dir)}", ncols=70):
-        phase = "Pdata" if "_Pdata_" in fname else "Mdata"
-        result = process_one_point(
-            os.path.join(data_dir, fname), ofst, phase, args, fig_dir,
-            case_name=case_name, rep_U=rep_U, ws_params=ws_params,
-            volt_means=volt_means
-        )
-        if result is not None:
-            # スペクトル配列は DataFrame に混ぜず別リストへ退避
-            spec_rows.append({
-                "aoa":     result["aoa"],
-                "mean_U":  result["mean_U"],
-                "freqs":   result.pop("_psd_freqs"),
-                "psd_Fy":  result.pop("_psd_Fy"),
-                "psd_Mz":  result.pop("_psd_Mz"),
-            })
-            # LCO非線形解析（補正済み信号は --lco 有無に関わらず pop して捨てる）
-            sig_t  = result.pop("_t")
-            sigs   = {"Fy": result.pop("_sig_Fy"), "Mz": result.pop("_sig_Mz")}
-            if args.lco:
-                lco_res = lco_analysis.analyze_point(
-                    sig_t, sigs, result["aoa"],
-                    short=_short_name(fname), fig_dir=fig_dir, args=args,
-                    case_name=case_name, rep_U=rep_U
-                )
-                # 指標を summary 行へマージ（自動列追加。自動ラベルは付けない）
-                result.update(lco_res["metrics"])
-                lco_rows.append(lco_res["row"])
-
-            result["rep_windspeed_U"]  = rep_U
-            result["rep_windspeed_mV"] = rep_mv
-            rows.append(result)
+    for result, spec_row, lco_row in ordered:
+        if result is None:
+            continue
+        spec_rows.append(spec_row)
+        if lco_row is not None:
+            lco_rows.append(lco_row)
+        result["rep_windspeed_U"]  = rep_U
+        result["rep_windspeed_mV"] = rep_mv
+        rows.append(result)
 
     if not rows:
         return None
 
-    df = pd.DataFrame(rows).sort_values("aoa").reset_index(drop=True)
+    df = pd.DataFrame(rows).sort_values("aoa", kind="stable").reset_index(drop=True)
     out_path = os.path.join(exp_dir, "flutter_summary.csv")
     df.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"  → {out_path} を保存しました（{len(df)} 点）")
@@ -757,8 +914,10 @@ def process_one_condition(exp_dir, ofst, args):
     # St–迎角プロット（この1風速条件でのストローハル数の迎角依存）
     plot_strouhal_aoa(df, exp_dir, rep_U, args, case_name=case_name)
 
-    # LCO: 迎角に沿った位相図スイープ（--lco 時のみ）
+    # LCO: 迎角に沿った位相図スイープ（--lco 時のみ。遅延 import は
+    # lco_analysis が flutter_analysis を import する循環参照を避けるため）
     if args.lco and lco_rows:
+        import lco_analysis
         lco_analysis.plot_phase_sweep(lco_rows, exp_dir, rep_U, args)
 
     return df, spec_rows, lco_rows
@@ -1387,7 +1546,8 @@ def run(args):
             print(f"[エラー] ofst_dir が見つかりません: {ofst_dir}", file=sys.stderr)
             sys.exit(1)
         ofst = load_ofst_means(ofst_dir)
-        process_one_condition(exp_dir, ofst, args)
+        with _executor_context(args) as executor:
+            process_one_condition(exp_dir, ofst, args, executor=executor)
         return exp_dir
 
     # ---- 一括処理モード（--base_dir） ----
@@ -1430,15 +1590,16 @@ def run(args):
     summaries  = []
     panel_data = []   # 全条件比較パネル用 (rep_U, spec_rows)
     lco_data   = []   # 全条件LCO用 (rep_U, lco_rows)
-    for cond_dir in cond_dirs:
-        log = load_log(cond_dir)
-        rep_U = log.get("rep_windspeed_U", 0.0)
-        result = process_one_condition(cond_dir, ofst, args)
-        if result is not None:
-            df, spec_rows, lco_rows = result
-            summaries.append((rep_U, df))
-            panel_data.append((rep_U, spec_rows))
-            lco_data.append((rep_U, lco_rows))
+    with _executor_context(args) as executor:
+        for cond_dir in cond_dirs:
+            log = load_log(cond_dir)
+            rep_U = log.get("rep_windspeed_U", 0.0)
+            result = process_one_condition(cond_dir, ofst, args, executor=executor)
+            if result is not None:
+                df, spec_rows, lco_rows = result
+                summaries.append((rep_U, df))
+                panel_data.append((rep_U, spec_rows))
+                lco_data.append((rep_U, lco_rows))
 
     # Layer 3: マップ出力（条件フォルダと同じ階層に保存）
     map_dir = os.path.join(search_dir, f"{base_name}_results")

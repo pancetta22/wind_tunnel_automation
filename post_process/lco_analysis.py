@@ -43,6 +43,7 @@ from flutter_analysis import (
     highpass,
     calc_psd,
     dominant_freq,
+    decimate_minmax,
     FS_TARGET,
     HP_CUTOFF_HZ,
 )
@@ -399,14 +400,20 @@ def analyze_signal(x, fs=FS_TARGET, fmin=LCO_FMIN_HZ, fmax=LCO_FMAX_HZ,
 #  カルテ図（3点セット：時系列／位相図／スペクトル）
 # ============================================================
 def plot_chart(fig_dir, short, t, signals, fs=FS_TARGET, aoa=None,
-               fmax_disp=None, case_name="", rep_U=None):
+               fmax_disp=None, case_name="", rep_U=None, hq=False):
     """1計測点のカルテ図（Trickey fig.4-7 形式）を出力する。
 
     signals : dict {"Fy": (x_hp, metrics, artifacts), "Mz": (...)}
               x_hp は補正済み・HP済み信号。
     横3列（時系列 / 位相図 / スペクトル）× 行数（信号数）。
+
+    hq=False（既定）: 時系列は min/max 間引き、位相図は stride 間引きで
+    描画コストを削減する（波形の外形・軌道の形はほぼ保たれる）。
+    hq=True: 従来どおり全点描画・bbox_inches="tight"。
     """
     os.makedirs(fig_dir, exist_ok=True)
+    if not hq:
+        plt.rcParams["path.simplify_threshold"] = 1.0
     names = list(signals.keys())
     nrow = len(names)
     fig, axes = plt.subplots(nrow, 3, figsize=(15, 4 * nrow), squeeze=False)
@@ -427,14 +434,15 @@ def plot_chart(fig_dir, short, t, signals, fs=FS_TARGET, aoa=None,
 
         # --- 列1: 時系列 ---
         ax = axes[i, 0]
-        ax.plot(t_x, x, lw=0.6, color="steelblue")
+        t_plot, x_plot = (t_x, x) if hq else decimate_minmax(t_x, x)
+        ax.plot(t_plot, x_plot, lw=0.6, color="steelblue")
         ax.set_xlabel("time [s]")
         ax.set_ylabel(f"{name}")
         ax.set_title(f"{name}  time series")
 
         # --- 列2: 位相図 x(t) vs x(t-τ) ---
         ax = axes[i, 1]
-        emb = art["emb"]
+        emb = art["emb"] if hq else _decimate_emb(art["emb"], max_points=15000)
         if emb is not None:
             ax.plot(emb[:, 0], emb[:, 1], lw=0.4, color="darkorange", alpha=0.8)
         ax.set_xlabel(f"{name}(t)")
@@ -463,7 +471,8 @@ def plot_chart(fig_dir, short, t, signals, fs=FS_TARGET, aoa=None,
 
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     out = os.path.join(fig_dir, f"{short}_lco.png")
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    save_kw = {"bbox_inches": "tight"} if hq else {}
+    fig.savefig(out, dpi=150, **save_kw)
     plt.close(fig)
     return out
 
@@ -523,7 +532,8 @@ def analyze_point(t, sigs, aoa, short, fig_dir, args, case_name="", rep_U=None):
     if chart_sigs:
         plot_chart(fig_dir, short, t, chart_sigs, fs=FS_TARGET,
                    aoa=aoa, fmax_disp=fmax_disp,
-                   case_name=case_name, rep_U=rep_U)
+                   case_name=case_name, rep_U=rep_U,
+                   hq=getattr(args, "hq", False))
 
     return {"metrics": metrics, "row": row}
 
