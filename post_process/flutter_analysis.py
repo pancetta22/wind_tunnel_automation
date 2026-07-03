@@ -198,6 +198,12 @@ def parse_args():
                    help="迎角×周波数マップの周波数表示上限 [Hz]（デフォルト: 50）")
     p.add_argument("--map_dyn_range", type=float, default=60.0,
                    help="迎角×周波数マップのカラー dB ダイナミックレンジ（デフォルト: 60）")
+    p.add_argument("--st_clear_thk", type=float, default=0.2,
+                   help="ストローハル数図で「明瞭なLCO」とみなす loop_thickness の上限"
+                        "（--lco 併用時に強調表示。デフォルト: 0.2）")
+    p.add_argument("--st_hide_noisy", action="store_true",
+                   help="ストローハル数図（strouhal_fu）で loop_thickness が st_clear_thk を"
+                        "超えるノイズ的な点を完全に非表示にする（--lco 併用時のみ有効）")
 
     # ---- LCO（リミットサイクル振動）非線形動力学解析（オプトイン） ----
     p.add_argument("--lco", action="store_true",
@@ -906,9 +912,10 @@ def plot_strouhal_aoa(df, exp_dir, rep_U, args, case_name=""):
 
     fig, ax = plt.subplots(figsize=(11, 6.5))
 
-    for st_col, flut_col, comp, color in [
-        ("St_Fy", "flutter_A_Fy", "Fy", "tab:blue"),
-        ("St_Mz", "flutter_A_Mz", "Mz", "tab:orange"),
+    # Fy/Mz はマーカー形状（○/□）で区別し、透過を掛けて重なっても両方見えるようにする
+    for st_col, flut_col, comp, color, marker in [
+        ("St_Fy", "flutter_A_Fy", "Fy", "tab:blue",   "o"),
+        ("St_Mz", "flutter_A_Mz", "Mz", "tab:orange", "s"),
     ]:
         if st_col not in df.columns:
             continue
@@ -920,7 +927,7 @@ def plot_strouhal_aoa(df, exp_dir, rep_U, args, case_name=""):
 
         # 迎角順に線でつなぎ、傾向（一定か張り付きか）を見やすくする
         order = np.argsort(aoa)
-        ax.plot(aoa[order], st[order], color=color, lw=1.2, alpha=0.7,
+        ax.plot(aoa[order], st[order], color=color, lw=1.2, alpha=0.4,
                 zorder=2, label=f"{comp}")
 
         # フラッター判定（Route A）有の点だけ赤×を重ねる
@@ -929,8 +936,8 @@ def plot_strouhal_aoa(df, exp_dir, rep_U, args, case_name=""):
             idx_yes = flag == 1
             ax.scatter(aoa[idx_yes], st[idx_yes], marker="x", s=70,
                        color="red", zorder=4, label="_")
-        ax.scatter(aoa, st, marker="o", s=28, color=color,
-                   zorder=3, label="_")
+        ax.scatter(aoa, st, marker=marker, s=32, color=color, alpha=0.55,
+                   edgecolors="none", zorder=3, label="_")
 
     # 凡例用ダミー（フラッター印）
     ax.scatter([], [], marker="x", color="red", label="Flutter (Route A)")
@@ -1113,22 +1120,50 @@ def plot_strouhal_fu(summaries, out_dir, args):
 
     渦放出（St一定 → 点が等St線に沿う）とロックイン（f が固有振動数に張り付き、
     St が 1/U で低下 → 点が等St線を横切る）を判別するための図。Fy/Mz を左右の
-    サブプロットに並べ、各点をフラッター判定（Route A）の有無で色分けする。
+    サブプロットに並べる。
+
+    --lco 併用で loop_thickness_Fy/Mz が算出済みなら、細い閉ループ（=明瞭な周期
+    LCO）の点を大きく・濃く・viridis_r で着色して強調し、ノイズ的な点を沈める
+    （点が多すぎて意味のある点が埋もれる問題への対策）。列が無ければ従来どおり
+    フラッター判定（Route A）の有無で色分けする。
 
     summaries: list of (rep_U, DataFrame)  各 DataFrame に mean_U / freq_Fy /
-               freq_Mz / flutter_A_Fy / flutter_A_Mz を含む。
-    横軸は各計測点の mean_U（rep_U ではない）。代表長さは REF_LENGTH_M。
+               freq_Mz / flutter_A_Fy / flutter_A_Mz（--lco時は loop_thickness_*）
+               を含む。横軸は各計測点の mean_U（rep_U ではない）。L=REF_LENGTH_M。
     """
     if not summaries:
         return
 
     L = REF_LENGTH_M
+    clear_thk  = getattr(args, "st_clear_thk", 0.2)
+    hide_noisy = getattr(args, "st_hide_noisy", False)
+
+    comps = [
+        (0, "freq_Fy", "flutter_A_Fy", "loop_thickness_Fy", "Fy", "N"),
+        (1, "freq_Mz", "flutter_A_Mz", "loop_thickness_Mz", "Mz", "Nm"),
+    ]
+
+    # loop_thickness 列が（--lco で）存在すれば「明瞭な振動点の強調」モード。
+    # 無ければ従来の Route A 色分けにフォールバックする。
+    use_thk = any(c[3] in df.columns for _rep_U, df in summaries for c in comps)
+
+    # 強調モードでは thickness を全成分共通スケールで正規化し、共有カラーバーを付す
+    norm = None
+    thk_vmax = 1.0
+    if use_thk:
+        thk_all = []
+        for _rep_U, df in summaries:
+            for c in comps:
+                if c[3] in df.columns:
+                    v = pd.to_numeric(df[c[3]], errors="coerce").values
+                    thk_all.extend(v[np.isfinite(v)])
+        thk_vmax = max(thk_all) if thk_all else 1.0
+        norm = plt.Normalize(vmin=0.0, vmax=thk_vmax)
+
     fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
 
-    for ax, freq_col, flut_col, comp, unit in [
-        (axes[0], "freq_Fy", "flutter_A_Fy", "Fy", "N"),
-        (axes[1], "freq_Mz", "flutter_A_Mz", "Mz", "Nm"),
-    ]:
+    for idx_ax, freq_col, flut_col, thk_col, comp, unit in comps:
+        ax = axes[idx_ax]
         u_all = []   # 等St線のレンジ決定用に有効な mean_U を集める
         f_all = []
         for _rep_U, df in summaries:
@@ -1141,24 +1176,49 @@ def plot_strouhal_fu(summaries, out_dir, args):
                 continue
             u = df.loc[valid, "mean_U"].values
             f = df.loc[valid, freq_col].values
-            u_all.extend(u)
-            f_all.extend(f)
 
-            # フラッター判定（Route A）で色分け。None（閾値未設定）は灰○。
-            if flut_col in df.columns:
-                flag = df.loc[valid, flut_col].values
+            if use_thk and thk_col in df.columns:
+                # loop_thickness で強調: 細い(=明瞭)ほど大きく濃く、太い点は沈める
+                thk = pd.to_numeric(df.loc[valid, thk_col], errors="coerce").values
+                fin   = np.isfinite(thk)
+                clear = fin & (thk < clear_thk)
+                noisy = fin & (thk >= clear_thk)
+                nan_t = ~fin
+                sizes = 200 * np.clip(
+                    1 - np.where(fin, thk, thk_vmax) / (thk_vmax + 1e-9), 0.05, 1.0)
+                ax.scatter(u[clear], f[clear], c=thk[clear], cmap="viridis_r",
+                           norm=norm, s=sizes[clear], alpha=0.9,
+                           edgecolors="k", linewidths=0.3, zorder=4, label="_")
+                if hide_noisy:
+                    shown = clear
+                else:
+                    ax.scatter(u[noisy], f[noisy], c=thk[noisy], cmap="viridis_r",
+                               norm=norm, s=sizes[noisy], alpha=0.18,
+                               edgecolors="none", zorder=2, label="_")
+                    # thickness 未算出（freqのみ有効）の点は薄い灰の小点で残す
+                    ax.scatter(u[nan_t], f[nan_t], marker="o", s=8, color="0.7",
+                               alpha=0.15, edgecolors="none", zorder=2, label="_")
+                    shown = np.ones(u.shape, dtype=bool)
+                u_all.extend(u[shown])
+                f_all.extend(f[shown])
             else:
-                flag = np.full(u.shape, np.nan)
-            flag_num = pd.to_numeric(pd.Series(flag), errors="coerce").values
-            idx_yes = flag_num == 1
-            idx_no  = flag_num == 0
-            idx_na  = ~np.isfinite(flag_num)
-            ax.scatter(u[idx_yes], f[idx_yes], marker="x", s=80,
-                       color="red", zorder=3, label="_")
-            ax.scatter(u[idx_no], f[idx_no], marker="o", s=50,
-                       color="royalblue", zorder=3, label="_")
-            ax.scatter(u[idx_na], f[idx_na], marker="o", s=50,
-                       facecolors="none", edgecolors="gray", zorder=3, label="_")
+                # フォールバック: フラッター判定（Route A）で色分け。None は灰○。
+                if flut_col in df.columns:
+                    flag = df.loc[valid, flut_col].values
+                else:
+                    flag = np.full(u.shape, np.nan)
+                flag_num = pd.to_numeric(pd.Series(flag), errors="coerce").values
+                idx_yes = flag_num == 1
+                idx_no  = flag_num == 0
+                idx_na  = ~np.isfinite(flag_num)
+                ax.scatter(u[idx_yes], f[idx_yes], marker="x", s=80,
+                           color="red", zorder=3, label="_")
+                ax.scatter(u[idx_no], f[idx_no], marker="o", s=50,
+                           color="royalblue", zorder=3, label="_")
+                ax.scatter(u[idx_na], f[idx_na], marker="o", s=50,
+                           facecolors="none", edgecolors="gray", zorder=3, label="_")
+                u_all.extend(u)
+                f_all.extend(f)
 
         # 散布点を打ってから軸範囲を確定し、その範囲で等St線を引く
         if u_all:
@@ -1186,9 +1246,18 @@ def plot_strouhal_fu(summaries, out_dir, args):
                         fontsize=9, ha="right", va="bottom", zorder=2)
 
         # 凡例用ダミー
-        ax.scatter([], [], marker="x", color="red",       label="Flutter (Route A)")
-        ax.scatter([], [], marker="o", color="royalblue",  label="No flutter")
-        ax.plot([], [], color="0.6", lw=0.8, ls="--",      label="iso-St lines")
+        if use_thk:
+            ax.scatter([], [], marker="o", s=90, color="0.35",
+                       edgecolors="k", linewidths=0.3,
+                       label=f"clear LCO (thk < {clear_thk:g})")
+            if not hide_noisy:
+                ax.scatter([], [], marker="o", s=18, color="0.7",
+                           label="noisy (thick loop, faint)")
+            ax.plot([], [], color="0.6", lw=0.8, ls="--", label="iso-St lines")
+        else:
+            ax.scatter([], [], marker="x", color="red",       label="Flutter (Route A)")
+            ax.scatter([], [], marker="o", color="royalblue",  label="No flutter")
+            ax.plot([], [], color="0.6", lw=0.8, ls="--",      label="iso-St lines")
 
         ax.set_xlabel("Wind speed U [m/s]", fontsize=13)
         ax.set_ylabel("Dominant frequency f [Hz]", fontsize=13)
@@ -1198,6 +1267,14 @@ def plot_strouhal_fu(summaries, out_dir, args):
 
     fig.suptitle(f"Strouhal number  (St = f·L/U,  L = {L:g} m)", fontsize=14)
     fig.tight_layout()
+    # 強調モードのみ、thickness の共有カラーバーを付す
+    if use_thk and norm is not None:
+        sm = plt.cm.ScalarMappable(norm=norm, cmap="viridis_r")
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=axes, fraction=0.046, pad=0.04)
+        cbar.set_label("loop thickness  (小=明瞭な周期LCO)", fontsize=11)
+    else:
+        print("  [ヒント] --lco を付けると loop_thickness で明瞭な振動点を強調表示します")
     out_path = os.path.join(out_dir, "strouhal_fu.png")
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

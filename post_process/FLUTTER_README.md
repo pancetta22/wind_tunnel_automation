@@ -143,7 +143,7 @@ rm -rf /c/tmp/260701_flutter
 | `figures/<名前>.png`        | 時系列3版／PSD／RMS時間推移 | **(A) 常に自動** |
 | `flutter_summary.csv`       | 迎角・RMS各成分・卓越周波数・St・フラッター判定A/B（`--lco`時はLCO指標列を追加） | **(A) 常に自動** |
 | `aoa_freq_map_Fy/Mz.png`    | 迎角×周波数マップ | **(A) 常に自動** |
-| `strouhal_aoa.png`          | St–迎角プロット | **(A) 常に自動** |
+| `strouhal_aoa.png`          | St–迎角プロット（Fy=○/Mz=□ を透過表示で重ね、重なっても両方見える） | **(A) 常に自動** |
 | `figures/<名前>_lco.png`    | LCO カルテ図（時系列／位相図／スペクトル） | **(B) 自動②のみ**（1条件で欲しければ `--exp_dir --lco`） |
 | `phase_sweep_Fy/Mz.png`     | 迎角に沿った位相図スイープ | **(B) 自動②のみ** |
 
@@ -152,7 +152,7 @@ rm -rf /c/tmp/260701_flutter
 | 出力 | 内容 | トリガ |
 | --- | --- | --- |
 | `flutter_map_Fy/Mz_A_threshold.png`, `..._B_snr.png` | フラッター発生マップ（ルートA/B） | **(B) 自動②のみ** |
-| `strouhal_fu.png`           | 卓越周波数×風速＋等St線 | **(B) 自動②のみ** |
+| `strouhal_fu.png`           | 卓越周波数×風速＋等St線。`--lco` 併用時は `loop_thickness` で明瞭な周期LCO点を大きく・濃く強調し（`viridis_r` 着色＋共有カラーバー）、ノイズ点を沈める。`--lco` 無しは従来のフラッター判定(Route A)色分け | **(B) 自動②のみ** |
 | `rms_overview.png` / `rms_overview_6axis.png` | 全条件・全迎角のRMS概観（Fy/Mz・6成分） | **(B) 自動②のみ** |
 | `aoa_freq_panel.png`        | 風速条件を縦積みした迎角×周波数マップ | **(B) 自動②のみ** |
 | `bifurcation_Fy/Mz.png`     | 分岐図（迎角×Poincaré値） | **(B) 自動②のみ** |
@@ -210,6 +210,8 @@ python flutter_analysis.py --base_dir C:/WindyData/260624_flutter --lco --lco_sp
 | `--edge_trim_sec` | 前処理後に両端を切り捨てる長さ [秒]（補間段差・フィルタ端の除去。0で無効） | `0.5` |
 | `--map_fmax`      | 迎角×周波数マップの周波数表示上限 [Hz] | `50.0` |
 | `--map_dyn_range` | マップのカラー dB ダイナミックレンジ | `60.0` |
+| `--st_clear_thk`  | `strouhal_fu` で「明瞭なLCO」とみなす `loop_thickness` の上限（`--lco` 併用時に強調表示） | `0.2` |
+| `--st_hide_noisy` | `strouhal_fu` で `loop_thickness > st_clear_thk` のノイズ的な点を完全に非表示（`--lco` 併用時のみ有効） | 無効 |
 | `--lco`           | LCO非線形解析（位相図・Poincaré・調和指標・成長率）を有効化 | 無効 |
 | `--lco_signals`   | LCO解析の主軸信号（カンマ区切り） | `Fy,Mz` |
 | `--lco_tau_mode`  | 時間遅れτの推定法（`zero_cross` / `quarter_period`） | `zero_cross` |
