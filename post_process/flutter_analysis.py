@@ -1431,7 +1431,7 @@ def plot_strouhal_fu(summaries, out_dir, args):
         sm = plt.cm.ScalarMappable(norm=norm, cmap="viridis_r")
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=axes, fraction=0.046, pad=0.04)
-        cbar.set_label("loop thickness  (小=明瞭な周期LCO)", fontsize=11)
+        cbar.set_label("loop thickness  (small = clear periodic LCO)", fontsize=11)
     else:
         print("  [ヒント] --lco を付けると loop_thickness で明瞭な振動点を強調表示します")
     out_path = os.path.join(out_dir, "strouhal_fu.png")
