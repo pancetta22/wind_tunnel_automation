@@ -159,7 +159,7 @@ rm -rf /c/tmp/260701_flutter
 | 出力 | 内容 | トリガ |
 | --- | --- | --- |
 | `figures/<名前>.png`        | 時系列3版／PSD／RMS時間推移 | **(A) 常に自動** |
-| `flutter_summary.csv`       | 迎角・RMS各成分・卓越周波数・St・フラッター判定A/B（`--lco`時はLCO指標列を追加） | **(A) 常に自動** |
+| `flutter_summary.csv`       | 迎角・RMS各成分・卓越周波数・St・**変動空気力係数 C_Fy_rms/C_Mz_rms・換算風速 Ustar・換算周波数 k・Re**・フラッター判定A/B（`--lco`時はLCO指標列を追加） | **(A) 常に自動** |
 | `aoa_freq_map_Fy/Mz.png`    | 迎角×周波数マップ | **(A) 常に自動** |
 | `strouhal_aoa.png`          | St–迎角プロット（Fy=○/Mz=□ を透過表示で重ね、重なっても両方見える） | **(A) 常に自動** |
 | `figures/<名前>_lco.png`    | LCO カルテ図（時系列／位相図／スペクトル） | **(B) 自動②のみ**（1条件で欲しければ `--exp_dir --lco`） |
@@ -171,6 +171,7 @@ rm -rf /c/tmp/260701_flutter
 | --- | --- | --- |
 | `flutter_map_Fy/Mz_A_threshold.png`, `..._B_snr.png` | フラッター発生マップ（ルートA/B） | **(B) 自動②のみ** |
 | `strouhal_fu.png`           | 卓越周波数×風速＋等St線。`--lco` 併用時は `loop_thickness` で明瞭な周期LCO点を大きく・濃く強調し（`viridis_r` 着色＋共有カラーバー）、ノイズ点を沈める。`--lco` 無しは従来のフラッター判定(Route A)色分け | **(B) 自動②のみ** |
+| `coeff_reduced_velocity.png` | 変動空気力係数 C′（=RMS/½ρU²A[·c]）×換算風速 U*（=U/f·c）。迎角で着色。動圧で正規化した応答振幅を U* に対して見て、**崩れず一致（collapse）＝準定常応答／発散＝フラッター臨界接近**を判別する | **(B) 自動②のみ** |
 | `rms_overview.png` / `rms_overview_6axis.png` | 全条件・全迎角のRMS概観（Fy/Mz・6成分） | **(B) 自動②のみ** |
 | `aoa_freq_panel.png`        | 風速条件を縦積みした迎角×周波数マップ | **(B) 自動②のみ** |
 | `bifurcation_Fy/Mz.png`     | 分岐図（迎角×Poincaré値） | **(B) 自動②のみ** |

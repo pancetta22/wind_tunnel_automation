@@ -28,13 +28,17 @@ flutter_analysis.py  フラッター実験 後処理スクリプト
 
   Layer 2: 条件ごとのサマリー（各 cXX/ フォルダ）
     - flutter_summary.csv
-      迎角, RMS_Fy, RMS_Mz, freq_Fy, freq_Mz, flutter_A_Fy, flutter_A_Mz,
-      flutter_B_Fy, flutter_B_Mz
-      （A=振幅閾値判定, B=スペクトルピーク判定）
+      迎角, RMS_Fy, RMS_Mz, freq_Fy, freq_Mz, St_Fy, St_Mz,
+      C_Fy_rms, C_Mz_rms, Ustar_Fy, Ustar_Mz, k_Fy, k_Mz, Re,
+      flutter_A_Fy, flutter_A_Mz, flutter_B_Fy, flutter_B_Mz
+      （A=振幅閾値判定, B=スペクトルピーク判定。C_*=変動空気力係数,
+        Ustar_*=換算風速=1/St, k_*=換算周波数=π·St, Re=レイノルズ数）
 
   Layer 3: 全条件のマップ（--base_dir 指定時）
     - flutter_map_Fy.png / flutter_map_Mz.png
       風速×迎角のフラッター発生マップ
+    - coeff_reduced_velocity.png
+      変動空気力係数 C′ × 換算風速 U*（collapse=準定常 / 発散=フラッター臨界接近）
 
 【フラッター判定の2ルート】
   ルートA（振幅閾値）: RMS > threshold_rms  [N] or [Nm]
@@ -86,6 +90,13 @@ COL_NAMES   = ["t", "Fx", "Fy", "Fz", "Mx", "My", "Mz"]
 # ストローハル数 St = f·L/U 用の代表長さ（翼弦長 [m]）。
 # calc_force.py の c_chord と一致させる。
 REF_LENGTH_M = 0.20
+
+# 変動空気力係数 C = F/(½ρU²A) 用の代表面積 [m²]。calc_force.py の基準面積と一致させる。
+REF_AREA_M2 = 0.04
+
+# レイノルズ数 Re = U·c/ν 用の空気の動粘性 [m²/s]（≈15℃）。Re は非依存性チェック用の
+# 副次量なので定数で足りる。将来 experiment_log の気温から精緻化する余地はある。
+NU_AIR = 1.5e-5
 
 # RMSのみ追加で算出する成分（Fy/Mz は既存ブロックで処理済み）
 EXTRA_RMS_COMPS = ("Fx", "Fz", "Mx", "My")
@@ -383,6 +394,46 @@ def strouhal(freq, U, L=REF_LENGTH_M):
     return freq * L / U
 
 
+def reduced_velocity(freq, U, L=REF_LENGTH_M):
+    """換算風速 U* = U/(f·L)（= 1/St）を返す。1周期あたり流れが翼弦の何倍進むか。
+
+    空力弾性で標準的な横軸。U/f が無効（U≤0・非有限、f≤0・非有限）なら NaN。
+    """
+    if (U is None or not np.isfinite(U) or U <= 0
+            or not np.isfinite(freq) or freq <= 0):
+        return np.nan
+    return U / (freq * L)
+
+
+def reduced_frequency(freq, U, L=REF_LENGTH_M):
+    """換算周波数 k = π·f·L/U（= π·St、半弦 b=L/2 基準）を返す。
+
+    St から自明だが慣例で併記する。ガードは strouhal と同一。
+    """
+    st = strouhal(freq, U, L)
+    return np.pi * st if np.isfinite(st) else np.nan
+
+
+def force_coefficient(rms, U, rho, area=REF_AREA_M2, lever=1.0):
+    """変動空気力係数 C = rms/(½·ρ·U²·area·lever) を返す。
+
+    力係数なら lever=1、モーメント係数なら lever=代表長さ（例 翼弦 c）を渡す。
+    動圧を作れない条件（ρ が None/非有限/≤0、U≤0・非有限）は NaN。
+    """
+    if (rho is None or not np.isfinite(rho) or rho <= 0
+            or U is None or not np.isfinite(U) or U <= 0
+            or not np.isfinite(rms)):
+        return np.nan
+    return rms / (0.5 * rho * U ** 2 * area * lever)
+
+
+def reynolds(U, L=REF_LENGTH_M, nu=NU_AIR):
+    """レイノルズ数 Re = U·L/ν を返す。U が無効なら NaN。"""
+    if U is None or not np.isfinite(U) or U <= 0:
+        return np.nan
+    return U * L / nu
+
+
 def flutter_judge_A(rms, threshold):
     """ルートA: RMS が閾値を超えたらフラッター有。"""
     if threshold is None:
@@ -619,6 +670,13 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
     # 代表風速（各条件の冒頭1点）ではなく、当該計測データ全体の平均を使う。
     mean_U = mean_U_for_point(short, volt_means or {}, ws_params)
 
+    # ---- 第1層の無次元数（変動空気力係数・換算風速・換算周波数・Re） ----
+    # 動圧 ½ρU² で振幅を正規化し、風速をまたいで応答を比較できるようにする。
+    # ρ は experiment_log 由来（ws_params["rho"]）。ρ・U が無効なら各ヘルパが NaN を返す。
+    rho_air = ws_params.get("rho") if ws_params else None
+    C_Fy_rms = force_coefficient(rms_Fy, mean_U, rho_air)                   # 力係数（lever=1）
+    C_Mz_rms = force_coefficient(rms_Mz, mean_U, rho_air, lever=REF_LENGTH_M)  # モーメント係数
+
     return {
         "ref_angle":    ref_angle,
         "suffix":       suffix,
@@ -634,6 +692,14 @@ def process_one_point(csv_path, ofst, phase, args, fig_dir, case_name="", rep_U=
         "freq_Mz":      freq_Mz,
         "St_Fy":        strouhal(freq_Fy, mean_U),
         "St_Mz":        strouhal(freq_Mz, mean_U),
+        # 第1層の無次元数（振幅の無次元化・標準的な換算量）
+        "C_Fy_rms":     C_Fy_rms,                          # 変動力係数
+        "C_Mz_rms":     C_Mz_rms,                          # 変動モーメント係数
+        "Ustar_Fy":     reduced_velocity(freq_Fy, mean_U),  # 換算風速（=1/St）
+        "Ustar_Mz":     reduced_velocity(freq_Mz, mean_U),
+        "k_Fy":         reduced_frequency(freq_Fy, mean_U),  # 換算周波数（=π·St）
+        "k_Mz":         reduced_frequency(freq_Mz, mean_U),
+        "Re":           reynolds(mean_U),                   # レイノルズ数（副次量）
         "flutter_A_Fy": f_A_Fy,
         "flutter_A_Mz": f_A_Mz,
         "flutter_B_Fy": f_B_Fy,
@@ -1440,6 +1506,73 @@ def plot_strouhal_fu(summaries, out_dir, args):
     print("[マップ] strouhal_fu.png を保存しました")
 
 
+def plot_coeff_reduced_velocity(summaries, out_dir, args):
+    """全条件横断で、変動空気力係数 C′ を換算風速 U* に対してプロットする。
+
+    横軸 U* = U/(f·c)、縦軸 C′ = RMS/(½ρU²A[·c])。動圧で正規化した応答振幅を
+    U* に対して見ることで「C′ が U* に対し崩れず一致（collapse）＝準定常応答か、
+    発散＝フラッター臨界接近か」を1枚で読む。点は迎角で着色する。Fy/Mz を左右に並べる。
+
+    summaries: list of (rep_U, DataFrame)  各 DataFrame は process_one_condition が返す。
+               C_Fy_rms/C_Mz_rms・Ustar_Fy/Ustar_Mz・aoa を含む。
+    """
+    if not summaries:
+        return
+
+    comps = [
+        (0, "Ustar_Fy", "C_Fy_rms", "Fy", "C'_Fy = RMS_Fy / (½ρU²A)"),
+        (1, "Ustar_Mz", "C_Mz_rms", "Mz", "C'_Mz = RMS_Mz / (½ρU²A·c)"),
+    ]
+
+    # 迎角の全域を共有カラースケールにする（左右サブプロットで色の意味を揃える）
+    aoa_all = []
+    for _rep_U, df in summaries:
+        if "aoa" in df.columns:
+            aoa_all.extend(pd.to_numeric(df["aoa"], errors="coerce").dropna().tolist())
+    if not aoa_all:
+        return
+    norm = plt.Normalize(vmin=min(aoa_all), vmax=max(aoa_all))
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
+    any_point = False
+    for idx_ax, ux_col, cy_col, comp, ylabel in comps:
+        ax = axes[idx_ax]
+        for _rep_U, df in summaries:
+            if ux_col not in df.columns or cy_col not in df.columns:
+                continue
+            ux = pd.to_numeric(df[ux_col], errors="coerce").values
+            cy = pd.to_numeric(df[cy_col], errors="coerce").values
+            aoa = pd.to_numeric(df.get("aoa"), errors="coerce").values
+            # U*>0・C′>0（log軸）・迎角有限の点のみ採用
+            valid = (np.isfinite(ux) & (ux > 0)
+                     & np.isfinite(cy) & (cy > 0) & np.isfinite(aoa))
+            if not valid.any():
+                continue
+            any_point = True
+            ax.scatter(ux[valid], cy[valid], c=aoa[valid], cmap="coolwarm",
+                       norm=norm, s=36, alpha=0.85, edgecolors="k",
+                       linewidths=0.3, zorder=3, label="_")
+
+        ax.set_xlabel("Reduced velocity  U* = U/(f·c)", fontsize=13)
+        ax.set_ylabel(ylabel, fontsize=13)
+        ax.set_yscale("log")
+        ax.set_title(f"{comp}", fontsize=13)
+        ax.grid(True, which="both", alpha=0.3)
+
+    fig.suptitle("Fluctuating force coefficient vs reduced velocity "
+                 "(collapse = quasi-steady, divergence = flutter onset)", fontsize=14)
+    fig.tight_layout()
+    if any_point:
+        sm = plt.cm.ScalarMappable(norm=norm, cmap="coolwarm")
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=axes, fraction=0.046, pad=0.04)
+        cbar.set_label("Angle of attack [deg]", fontsize=11)
+    out_path = os.path.join(out_dir, "coeff_reduced_velocity.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("[マップ] coeff_reduced_velocity.png を保存しました")
+
+
 def plot_rms_overview(summaries, out_dir):
     """全条件・全迎角のRMS一覧グラフ（フラッター強度の俯瞰用）。"""
     if not summaries:
@@ -1606,6 +1739,7 @@ def run(args):
     os.makedirs(map_dir, exist_ok=True)
     plot_flutter_map(summaries, map_dir)
     plot_strouhal_fu(summaries, map_dir, args)
+    plot_coeff_reduced_velocity(summaries, map_dir, args)
     plot_rms_overview(summaries, map_dir)
     plot_rms_overview_6axis(summaries, map_dir)
     plot_aoa_freq_panel(panel_data, map_dir, args)
