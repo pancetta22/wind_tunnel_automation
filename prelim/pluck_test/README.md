@@ -118,3 +118,34 @@ python free_decay_analysis.py rec01.csv rec02.csv --signals Fy,Mz --fmin 1 --fma
 ```
 
 本タスクでは同定と出力までを行う。μ/Sc/フラッター速度指数の算出は値が揃ってから別途実装する。
+
+---
+
+## 参考文献（理論的根拠）
+
+同定した f_n・ζ が「なぜ・どうフラッター/LCO の理論解につながるか」の根拠。段階ごとに対応させる。
+
+**(1) 構造を1自由度ばね‑質量‑減衰系とみなす／自由減衰・対数減衰による f_n・ζ 同定**
+- J.P. Den Hartog, *Mechanical Vibrations*, 4th ed., McGraw‑Hill, 1956.（対数減衰法・粘性減衰系の自由振動）
+- D.J. Ewins, *Modal Testing: Theory, Practice and Application*, 2nd ed., Research Studies Press, 2000.（減衰振動からのモード同定）
+- R.W. Clough, J. Penzien, *Dynamics of Structures*, 3rd ed., Computers & Structures, 2003.
+
+**(2) ギャロッピング臨界風速（実効減衰 c − ½ρUD·A₁ の符号反転＝発散条件）**
+- J.P. Den Hartog, *Mechanical Vibrations*, 1956.（Den Hartog 判定法：横方向1自由度不安定条件 A₁ = ∂C_Fy/∂α + C_D > 0）
+- R.D. Blevins, *Flow‑Induced Vibration*, 2nd ed., Van Nostrand Reinhold, 1990, Ch.4（ギャロッピング臨界風速 U_crit と構造減衰・質量の関係）。
+
+**(3) 非線形準定常モデルによる LCO 振幅（空力入力エネルギー＝構造減衰散逸のつり合い）**
+- G.V. Parkinson, J.D. Smith, "The square prism as an aeroelastic non‑linear oscillator," *Quarterly Journal of Mechanics and Applied Mathematics*, 17(2), 225–239, 1964.（準定常空気力を迎角の多項式 A₁α+A₃α³+… で表し LCO 振幅を導く古典）
+- P.W. Bearman, I.S. Gartshore, D.J. Maull, G.V. Parkinson, "Experiments on flow‑induced vibration of a square‑section cylinder," *Journal of Fluids and Structures*, 1(1), 19–34, 1987.
+
+**(4) 無次元数（Scruton 数 Sc=4πmζ/ρD²・換算風速 U_R=U/f_nD）による普遍化**
+- R.D. Blevins, *Flow‑Induced Vibration*, 1990.
+- E. Naudascher, D. Rockwell, *Flow‑Induced Vibrations: An Engineering Guide*, Balkema, 1994.（Scruton 数・質量‑減衰パラメータの定義と役割）
+
+**(5) 古典フラッター（2自由度・曲げ‑ねじり連成、Mz 軸のねじりモードへ拡張する場合）**
+- Y.C. Fung, *An Introduction to the Theory of Aeroelasticity*, Dover, 1993（原著 1955）。
+- R.L. Bisplinghoff, H. Ashley, R.L. Halfman, *Aeroelasticity*, Addison‑Wesley, 1955.
+
+> 本予備実験（無風・自由減衰）が担うのは (1) の「構造側2係数」の実測。理論解を出すには、これに別途の
+> **質量 m** と **定常空力の勾配 A₁ = ∂C_Fy/∂α**（`run_experiment.m`／`post_process` で取得）を掛け合わせて
+> (2)–(5) の式に代入する。
