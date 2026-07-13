@@ -1372,18 +1372,14 @@ def plot_strouhal_fu(summaries, out_dir, args):
     # 無ければ従来の Route A 色分けにフォールバックする。
     use_thk = any(c[3] in df.columns for _rep_U, df in summaries for c in comps)
 
-    # 強調モードでは thickness を全成分共通スケールで正規化し、共有カラーバーを付す
+    # 強調モードでは color/size を「安定域 [0, clear_thk]」に集中させる。
+    # こうすると安定点(thk<clear_thk)の階調が潰れず、不安定点(thk>=clear_thk)は
+    # 単色グレーの中抜きに退避して、安定/不安定をカテゴリとして一目で分けられる。
+    # （旧実装は norm を 0〜全体最大(≈2, 不安定点が決める)に取っていたため、安定点が
+    #   すべてカラーマップ上端に押し込まれてほぼ同色になり、境界も曖昧だった。）
     norm = None
-    thk_vmax = 1.0
     if use_thk:
-        thk_all = []
-        for _rep_U, df in summaries:
-            for c in comps:
-                if c[3] in df.columns:
-                    v = pd.to_numeric(df[c[3]], errors="coerce").values
-                    thk_all.extend(v[np.isfinite(v)])
-        thk_vmax = max(thk_all) if thk_all else 1.0
-        norm = plt.Normalize(vmin=0.0, vmax=thk_vmax)
+        norm = plt.Normalize(vmin=0.0, vmax=clear_thk)
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
 
@@ -1403,26 +1399,30 @@ def plot_strouhal_fu(summaries, out_dir, args):
             f = df.loc[valid, freq_col].values
 
             if use_thk and thk_col in df.columns:
-                # loop_thickness で強調: 細い(=明瞭)ほど大きく濃く、太い点は沈める
+                # loop_thickness でカテゴリ分け:
+                #   安定(thk<clear_thk): viridis_r（[0,clear_thk]正規化）で塗り＋黒縁、
+                #                        細いほど大きく → 安定点の中の質の差が見える
+                #   不安定(thk>=clear_thk): 単色グレーの中抜き○に統一 → 境界を明示
                 thk = pd.to_numeric(df.loc[valid, thk_col], errors="coerce").values
                 fin   = np.isfinite(thk)
                 clear = fin & (thk < clear_thk)
                 noisy = fin & (thk >= clear_thk)
                 nan_t = ~fin
-                sizes = 200 * np.clip(
-                    1 - np.where(fin, thk, thk_vmax) / (thk_vmax + 1e-9), 0.05, 1.0)
+                # 安定点サイズ: clear_thk を基準に細い(=0)ほど大きく
+                sizes = 240 * np.clip(1 - thk / (clear_thk + 1e-9), 0.2, 1.0)
                 ax.scatter(u[clear], f[clear], c=thk[clear], cmap="viridis_r",
-                           norm=norm, s=sizes[clear], alpha=0.9,
-                           edgecolors="k", linewidths=0.3, zorder=4, label="_")
+                           norm=norm, s=sizes[clear], alpha=0.95,
+                           edgecolors="k", linewidths=0.6, zorder=4, label="_")
                 if hide_noisy:
                     shown = clear
                 else:
-                    ax.scatter(u[noisy], f[noisy], c=thk[noisy], cmap="viridis_r",
-                               norm=norm, s=sizes[noisy], alpha=0.18,
-                               edgecolors="none", zorder=2, label="_")
-                    # thickness 未算出（freqのみ有効）の点は薄い灰の小点で残す
-                    ax.scatter(u[nan_t], f[nan_t], marker="o", s=8, color="0.7",
-                               alpha=0.15, edgecolors="none", zorder=2, label="_")
+                    # 不安定点: 単色グレーの中抜き○（カラーマップは使わない）
+                    ax.scatter(u[noisy], f[noisy], marker="o", s=22,
+                               facecolors="none", edgecolors="0.55",
+                               linewidths=0.8, alpha=0.5, zorder=2, label="_")
+                    # thickness 未算出（freqのみ有効）の点はさらに薄い灰の小点で残す
+                    ax.scatter(u[nan_t], f[nan_t], marker="o", s=8, color="0.8",
+                               alpha=0.2, edgecolors="none", zorder=1, label="_")
                     shown = np.ones(u.shape, dtype=bool)
                 u_all.extend(u[shown])
                 f_all.extend(f[shown])
@@ -1473,11 +1473,12 @@ def plot_strouhal_fu(summaries, out_dir, args):
         # 凡例用ダミー
         if use_thk:
             ax.scatter([], [], marker="o", s=90, color="0.35",
-                       edgecolors="k", linewidths=0.3,
-                       label=f"clear LCO (thk < {clear_thk:g})")
+                       edgecolors="k", linewidths=0.6,
+                       label=f"stable LCO (thk < {clear_thk:g})")
             if not hide_noisy:
-                ax.scatter([], [], marker="o", s=18, color="0.7",
-                           label="noisy (thick loop, faint)")
+                ax.scatter([], [], marker="o", s=30, facecolors="none",
+                           edgecolors="0.55", linewidths=0.8,
+                           label=f"unstable (thk >= {clear_thk:g})")
             ax.plot([], [], color="0.6", lw=0.8, ls="--", label="iso-St lines")
         else:
             ax.scatter([], [], marker="x", color="red",       label="Flutter (Route A)")
@@ -1496,14 +1497,100 @@ def plot_strouhal_fu(summaries, out_dir, args):
     if use_thk and norm is not None:
         sm = plt.cm.ScalarMappable(norm=norm, cmap="viridis_r")
         sm.set_array([])
-        cbar = fig.colorbar(sm, ax=axes, fraction=0.046, pad=0.04)
-        cbar.set_label("loop thickness  (small = clear periodic LCO)", fontsize=11)
+        # extend='max' の矢印で「上端(clear_thk)より上=不安定域」を明示
+        cbar = fig.colorbar(sm, ax=axes, fraction=0.046, pad=0.04, extend="max")
+        cbar.set_label(
+            f"loop thickness (stable range 0-{clear_thk:g}; grey o = unstable)",
+            fontsize=11)
     else:
         print("  [ヒント] --lco を付けると loop_thickness で明瞭な振動点を強調表示します")
     out_path = os.path.join(out_dir, "strouhal_fu.png")
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("[マップ] strouhal_fu.png を保存しました")
+
+
+def plot_thickness_hist(summaries, out_dir, args):
+    """loop_thickness の分布（Fy/Mz）を描き、安定/不安定の閾値選定を支援する。
+
+    strouhal_fu 図の色分けは thk < st_clear_thk を「安定な周期LCO」とみなすが、
+    その閾値（既定 0.2）が妥当かはデータの分布を見ないと判断できない。本図は
+    ヒストグラム＋ECDF（累積分布）を描き、現在の clear_thk を縦線で重ねる。
+
+    - 分布が二峰性でその谷に clear_thk が乗っていれば、安定/不安定を自然に分離
+      できている（閾値は妥当）。
+    - 谷が clear_thk とずれていれば、谷の位置に --st_clear_thk を合わせるとよい。
+    - そもそも谷が無い（単峰・連続的）なら thk 単独では切れないサインで、振幅や
+      SNR の併用を検討する。
+
+    --lco 併用で loop_thickness_Fy/Mz が算出済みのときのみ図を出す。
+    """
+    if not summaries:
+        return
+
+    clear_thk = getattr(args, "st_clear_thk", 0.2)
+    comps = [("loop_thickness_Fy", "Fy", "tab:blue"),
+             ("loop_thickness_Mz", "Mz", "tab:orange")]
+
+    # 成分ごとに有限な thickness を収集
+    data = {}
+    for thk_col, comp, _color in comps:
+        vals = []
+        for _rep_U, df in summaries:
+            if thk_col in df.columns:
+                v = pd.to_numeric(df[thk_col], errors="coerce").values
+                vals.extend(v[np.isfinite(v)])
+        data[comp] = np.asarray(vals, dtype=float)
+
+    if all(v.size == 0 for v in data.values()):
+        return  # --lco 無しなど thickness が無ければスキップ
+
+    # ビン範囲を全成分共通化（左右で直接比較できるように）
+    vmax = max((v.max() for v in data.values() if v.size), default=1.0)
+    vmax = max(vmax, clear_thk * 1.5)
+    bins = np.linspace(0, vmax * 1.02, 41)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, (thk_col, comp, color) in zip(axes, comps):
+        v = data[comp]
+        if v.size == 0:
+            ax.set_visible(False)
+            continue
+        n_stable = int(np.sum(v < clear_thk))
+        n_total  = v.size
+        frac = 100.0 * n_stable / n_total
+
+        # 安定域を薄く塗り、ヒストグラム＋閾値線
+        ax.axvspan(0, clear_thk, color="tab:green", alpha=0.08, zorder=0)
+        ax.hist(v, bins=bins, color=color, alpha=0.4, edgecolor=color,
+                zorder=2, label=f"{comp}  (n={n_total})")
+        ax.axvline(clear_thk, color="crimson", lw=1.6, ls="--", zorder=3,
+                   label=f"clear_thk = {clear_thk:g}")
+
+        # ECDF（右軸）: 谷やしきい位置での累積割合を読みやすくする
+        ax2 = ax.twinx()
+        vs = np.sort(v)
+        ecdf = np.arange(1, vs.size + 1) / vs.size
+        ax2.plot(vs, ecdf, color="0.35", lw=1.2, alpha=0.85, zorder=4)
+        ax2.set_ylim(0, 1)
+        ax2.set_ylabel("ECDF (cumulative fraction)", color="0.35", fontsize=11)
+        ax2.tick_params(axis="y", labelcolor="0.35")
+
+        ax.set_title(f"{comp}:  stable (thk < {clear_thk:g}) = "
+                     f"{n_stable}/{n_total}  ({frac:.0f}%)", fontsize=12)
+        ax.set_xlabel("loop thickness", fontsize=12)
+        ax.set_ylabel("count", fontsize=12)
+        ax.set_xlim(0, vmax * 1.02)
+        ax.legend(fontsize=10, loc="upper right")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle("loop_thickness distribution "
+                 "(for choosing the stable/unstable threshold)", fontsize=13)
+    fig.tight_layout()
+    out_path = os.path.join(out_dir, "thickness_hist.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("[マップ] thickness_hist.png を保存しました")
 
 
 def plot_coeff_reduced_velocity(summaries, out_dir, args):
@@ -1739,6 +1826,7 @@ def run(args):
     os.makedirs(map_dir, exist_ok=True)
     plot_flutter_map(summaries, map_dir)
     plot_strouhal_fu(summaries, map_dir, args)
+    plot_thickness_hist(summaries, map_dir, args)
     plot_coeff_reduced_velocity(summaries, map_dir, args)
     plot_rms_overview(summaries, map_dir)
     plot_rms_overview_6axis(summaries, map_dir)
