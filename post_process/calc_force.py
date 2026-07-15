@@ -457,7 +457,24 @@ def plot_C_raw():
 
 
 def calb():
-    """風洞壁補正"""
+    """風洞壁補正（開放型測定部・2次元翼のポテンシャル理論補正）
+
+    出典: Brooks & Marcolini (AIAA Paper 84-2266) / AGARDograph 336 Sec.2 /
+          Barlow, Rae & Pope "Low-Speed Wind Tunnel Testing" (1984)
+
+    σ = (π²/48)(c/h)² として、
+      迎角 : Δα  = [(c/4h) + (π/24)(c/h)²]·Cl   [rad]
+               第1項=噴流たわみ（ダウンウォッシュ）、第2項=流線曲率。
+               B&M の乗算形 α_eff = α/ζ, ζ = (1+2σ)² + √(12σ) を
+               実測 Cl を使った加算形に線形化したもの（(c/h)² まで一致）。
+      抗力 : ΔCd = (c/4h)·Cl²   … ダウンウォッシュで揚力が後傾する誘導成分
+      Cm   : ΔCm = (π²/96)(c/h)²·Cl = (σ/2)·Cl … 曲率の見かけキャンバー分
+      揚力 : Cl は無補正（横軸=迎角側を補正する枠組み）
+
+    前提は開放型測定部・付着流（線形域）。Windy は c/h=1/3 と大きく
+    ζ ≈ 1.62 の大補正なので、失速域（|AoA|>10°程度）の補正値は目安。
+    各点の実測 Cl で横軸をずらすため、Cl が荒れると AoA_mod は非単調になる。
+    """
     C_aero_raw = pd.read_csv("C_aero_raw.csv", index_col=0)
     AoA = np.array(C_aero_raw.loc[:, "AoA"])
     Cl  = np.array(C_aero_raw.loc[:, "Cl"])
